@@ -33,22 +33,23 @@ object SpatialHudOverlay : EventListener {
     private val IDLE_RGB = floatArrayOf(1f, 1f, 1f)
 
     /**
-     * Debug witness: where the projection says each panel's centre is, drawn straight onto the screen.
-     * When the picture and these dots disagree, the divergence is in the GL draw, not in the maths.
+     * Debug witness: where the projection says each surface's centre is, drawn onto the screen.
+     * Only in the explicit marker probe (`-Dschizoid.spatial.autotest=markers`): magenta rings over
+     * every panel are a measurement, and a measurement has no business in a normal frame.
      */
-    private val DEBUG_MARKERS = System.getProperty("schizoid.spatial.debug") != null
+    private val DEBUG_MARKERS = System.getProperty("schizoid.spatial.autotest") == "markers"
 
     private const val LABEL_SIZE = 16f
     private const val HINT_SIZE = 14f
 
     private const val HINT_IDLE =
-        "СКМ - переносить · Ctrl+колесо - глубина · колесо - прокрутка · X - закрыть · ESC - меню игры"
+        "Прицел · СКМ - переносить панель или пульт · угол панели - размер · чат - свободная мышь"
     private const val HINT_CARRY =
         "Панель в руке · колесо - ближе/дальше · подойди к стене или панели, чтобы прикрепить · отпусти кнопку"
     private const val HINT_TYPING =
         "Ввод · ESC - выйти из поля · WASD работает"
     private const val HINT_CURSOR =
-        "Курсор · ЛКМ - нажать · Alt - вернуться к прицелу · камера не крутится"
+        "Чат · ЛКМ - нажать · СКМ - двигать панель · закрой чат - вернётся прицел"
 
     /** Eased 0..1 weight of "the crosshair is on a panel"; drives dot size, colour and label fade. */
     private var aim = 0f
@@ -58,8 +59,7 @@ object SpatialHudOverlay : EventListener {
     init {
         on<EventRenderImGuiContent> {
             val mc = Schizoid.mc
-            // The reticle is the pointer now, so it lives everywhere the crosshair used to: in a world,
-            // with no screen over it, and not hidden by F1.
+            // Hints accompany the vanilla central crosshair; chat uses its own native cursor.
             if (mc.level == null || mc.gui.screen() != null || mc.gui.hud.isHidden()) return@on
             val io = ImGui.getIO()
             val width = io.displaySizeX
@@ -75,40 +75,58 @@ object SpatialHudOverlay : EventListener {
             aim += (target - aim) * (1f - exp(-14f * dt))
             if (aim < 1e-4f) aim = 0f
             pulse = if (carrying) (pulse + dt * 2.2f) % 1f else 0f
-            // The reticle sits on the pointer, which is the screen centre unless cursor mode moved it.
+            // No screen is open here: gaze always uses the vanilla screen centre.
             val cx = if (SpatialInputRouter.cursorMode) SpatialInputRouter.pointerX().toFloat() else width * .5f
             val cy = if (SpatialInputRouter.cursorMode) SpatialInputRouter.pointerY().toFloat() else height * .5f
             val draw = ImGui.getForegroundDrawList()
-            reticle(draw, cx, cy, carrying)
-            if (active) edgePips(draw, width, height)
-            if (DEBUG_MARKERS) markers(draw, width, height)
-            // Vanilla's attack cooldown was drawn inside the crosshair we replaced; put it back.
-            if (aim < .02f) cooldown(draw, cx, cy)
+            // Vanilla owns the crosshair and attack indicator; never draw a second pointer.
+            if (active && DEBUG_MARKERS) markers(draw, width, height)
+            // The vanilla attack indicator remains enabled with the vanilla crosshair.
             if (!active) return@on
             if (hovered != null && aim > .02f) label(draw, cx, cy, hovered.displayTitle)
+            sizeHandle(draw, width, height, hovered, aim)
             pinHold(draw, cx, cy)
             warning(draw, width, height)
             hint(draw, width, height, SpatialInputRouter.cursorMode)
         }
     }
 
-    /** Dot plus four ticks around the vanilla crosshair: reads as a pointer without hiding the game. */
-    private fun reticle(draw: ImDrawList, cx: Float, cy: Float, carrying: Boolean) {
-        val color = color(aim, lerp(.5f, 1f, aim))
-        val gap = lerp(9f, 7f, aim)
-        val length = lerp(3.5f, 6.5f, aim)
-        val thickness = lerp(1.2f, 1.8f, aim)
-        draw.addLine(cx - gap - length, cy, cx - gap, cy, color, thickness)
-        draw.addLine(cx + gap, cy, cx + gap + length, cy, color, thickness)
-        draw.addLine(cx, cy - gap - length, cx, cy - gap, color, thickness)
-        draw.addLine(cx, cy + gap, cx, cy + gap + length, color, thickness)
-        // The dot is the actual pointer; it grows as the crosshair locks onto a canvas.
-        draw.addCircleFilled(cx, cy, lerp(1.1f, 2.1f, aim), color, 12)
-        if (carrying) {
-            // Breathing ring while a panel is in the hand: the carry state is not otherwise visible.
-            draw.addCircle(cx, cy, 5f + pulse * 6f, color(1f, (1f - pulse) * .5f), 24, 1.5f)
-        } else if (aim > .02f) {
-            draw.addCircle(cx, cy, lerp(6f, 11f, aim), color(aim, aim * .45f), 24, 1.2f)
+    /**
+     * Visible size handle on the panel under the reticle.
+     *
+     * The corner grip used to be an invisible 26 px zone at the bottom-right of the canvas, which on a
+     * panel dragged past the screen edge simply was not reachable: the panel could grow but never shrink
+     * back. This brackets the corner in screen space, is clamped into the screen when the corner itself
+     * is off it, and shows the live size while dragging.
+     */
+    private fun sizeHandle(draw: ImDrawList, width: Float, height: Float, hovered: SpatialSurface?, aim: Float) {
+        val resizing = SpatialInputRouter.resizingId?.let { id -> SpatialWindows.surfaces.firstOrNull { it.id == id } }
+        val surface = resizing ?: hovered ?: return
+        val at = SpatialInputRouter.gripScreen(surface) ?: return
+        // gripScreen() is in window pixels; the foreground draw list is in GUI-scaled pixels.
+        val mc = Schizoid.mc
+        val screenWidth = mc.window.screenWidth.toFloat()
+        val screenHeight = mc.window.screenHeight.toFloat()
+        val guiWidth = mc.window.guiScaledWidth.toFloat()
+        val guiHeight = mc.window.guiScaledHeight.toFloat()
+        if (screenWidth <= 0f || screenHeight <= 0f || guiWidth <= 0f || guiHeight <= 0f) return
+        val x = at.first * guiWidth / screenWidth
+        val y = at.second * guiHeight / screenHeight
+        if (x < 0f || y < 0f || x > width || y > height) return
+        val live = resizing != null
+        val weight = if (live) 1f else aim
+        val colour = color(weight, if (live) .95f else .35f + .45f * aim)
+        val arm = if (live) 12f else 9f
+        draw.addLine(x - arm, y, x, y, colour, 2f)
+        draw.addLine(x, y - arm, x, y, colour, 2f)
+        if (live) {
+            val text = "${surface.logicalW.toInt()} × ${surface.logicalH.toInt()}"
+            val font = ImGui.getFont()
+            val textWidth = font.calcTextSizeAX(HINT_SIZE, Float.MAX_VALUE, 0f, text)
+            val tx = (x + 14f).coerceAtMost(width - textWidth - 6f)
+            val ty = (y - HINT_SIZE - 6f).coerceAtLeast(4f)
+            draw.addRectFilled(tx - 4f, ty - 3f, tx + textWidth + 4f, ty + HINT_SIZE + 3f, 0x77000000, 3f)
+            draw.addText(font, HINT_SIZE, tx, ty, 0xEEFFFFFF.toInt(), text)
         }
     }
 
@@ -141,80 +159,6 @@ object SpatialHudOverlay : EventListener {
         }
     }
 
-    /**
-     * Ticks at the screen edge for every panel that is out of view.
-     *
-     * The workspace is a place, not a screen: turn around and the panels stay behind you, with nothing
-     * on screen saying so. A short tick at the edge, brighter the further out the panel is, turns
-     * "where did my settings go" into a glance.
-     */
-    private fun edgePips(draw: ImDrawList, width: Float, height: Float) {
-        val frame = SpatialWorldController.frame ?: return
-        val inset = 24f
-        val viewProjection = Matrix4f(frame.projection).mul(frame.view)
-        // Collect first: panels on the same arc land on nearly the same edge point, and three ticks
-        // stacked on one pixel read as one blurry tick.
-        val pips = ArrayList<FloatArray>(4)
-        for (surface in SpatialWindows.surfaces) {
-            if (surface.isOverlay || !surface.motion.drawable) continue
-            val point = Vector4f(
-                (surface.centerX - frame.x).toFloat(),
-                (surface.centerY - frame.y).toFloat(),
-                (surface.centerZ - frame.z).toFloat(), 1f
-            )
-            viewProjection.transform(point)
-            // Behind the camera there is no projection to trust: push the tick to the horizontal edge
-            // on the side the panel actually sits, instead of mirroring it to the wrong side.
-            val behind = point.w <= 1e-4f
-            val ndcX = if (behind) (if (point.x < 0f) -2f else 2f) else point.x / point.w
-            val ndcY = if (behind) 0f else point.y / point.w
-            if (!behind && kotlin.math.abs(ndcX) <= 1f && kotlin.math.abs(ndcY) <= 1f) continue
-            val rawX = (ndcX * .5f + .5f) * width
-            val rawY = (.5f - ndcY * .5f) * height
-            val x = rawX.coerceIn(inset, width - inset)
-            val y = rawY.coerceIn(inset, height - inset)
-            val outness = (kotlin.math.abs(rawX - x) / width + kotlin.math.abs(rawY - y) / height)
-                .coerceIn(0f, 1f)
-            pips.add(floatArrayOf(x, y, outness))
-        }
-        if (pips.isEmpty()) return
-        val centreX = width * .5f
-        val centreY = height * .5f
-        for ((index, pip) in pips.withIndex()) {
-            var x = pip[0]
-            var y = pip[1]
-            // Fan out whatever shares an edge: shift along the edge, away from the crowd.
-            var crowd = 0
-            var slot = 0
-            for ((other, candidate) in pips.withIndex()) {
-                if (other == index) continue
-                if (kotlin.math.abs(candidate[0] - x) + kotlin.math.abs(candidate[1] - y) > 16f) continue
-                crowd++
-                if (other < index) slot++
-            }
-            if (crowd > 0) {
-                val spread = (slot - (crowd) * .5f) * 11f
-                if (kotlin.math.abs(x - centreX) > kotlin.math.abs(y - centreY)) {
-                    y = (y + spread).coerceIn(inset, height - inset)
-                } else {
-                    x = (x + spread).coerceIn(inset, width - inset)
-                }
-            }
-            val dx = x - centreX
-            val dy = y - centreY
-            val length = kotlin.math.sqrt(dx * dx + dy * dy)
-            if (length < 1f) continue
-            val ux = dx / length
-            val uy = dy / length
-            val alpha = 0.32f + 0.45f * pip[2]
-            val colour = color(1f, alpha)
-            val tipX = x + ux * 7f
-            val tipY = y + uy * 7f
-            draw.addLine(x - ux * 5f, y - uy * 5f, tipX, tipY, colour, 1.8f)
-            draw.addCircleFilled(tipX, tipY, 2.1f, colour, 10)
-        }
-    }
-
     /** Hold-to-pin feedback: the gesture takes 1.8 s, so it has to show that it is counting. */
     private fun pinHold(draw: ImDrawList, cx: Float, cy: Float) {
         val progress = SpatialPins.progress
@@ -230,21 +174,6 @@ object SpatialHudOverlay : EventListener {
         val half = 60f
         draw.addRectFilled(cx - half, barY, cx + half, barY + 3f, 0x66000000)
         draw.addRectFilled(cx - half, barY, cx - half + half * 2f * progress.coerceIn(0f, 1f), barY + 3f, 0xCCFF9959.toInt())
-    }
-
-    /**
-     * Attack cooldown, which vanilla drew next to its crosshair. Only while it is actually charging,
-     * and only when the reticle is not showing a panel name in the same spot.
-     */
-    private fun cooldown(draw: ImDrawList, cx: Float, cy: Float) {
-        val player = Schizoid.mc.player ?: return
-        val scale = player.getAttackStrengthScale(.5f)
-        if (!scale.isFinite() || scale >= .999f) return
-        val width = 26f
-        val y = cy + 15f
-        val left = cx - width * .5f
-        draw.addRectFilled(left, y, left + width, y + 2f, 0x66000000)
-        draw.addRectFilled(left, y, left + width * scale.coerceIn(0f, 1f), y + 2f, 0xD9FFFFFF.toInt())
     }
 
     /** Name of the panel under the reticle, so the target is unambiguous without a mouse cursor. */

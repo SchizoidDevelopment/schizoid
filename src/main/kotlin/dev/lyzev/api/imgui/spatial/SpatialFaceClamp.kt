@@ -6,102 +6,122 @@ package dev.lyzev.api.imgui.spatial
 
 import dev.lyzev.schizoid.Schizoid
 import net.minecraft.core.BlockPos
-import net.minecraft.world.level.Level
-import org.joml.Quaternionf
-import org.joml.Vector3f
 import kotlin.math.abs
+import kotlin.math.floor
+import org.joml.Vector3f
 
-/**
- * Keeps a panel that is pinned to a block face inside that face.
- *
- * A panel is far bigger than a block, so "stick it on the wall" used to mean "hang half of it over
- * the edge into thin air". This walks the supporting cells along the panel's own width and height
- * axes and slides the panel back until its rectangle is supported: smaller than the wall it stops at
- * the edge, bigger than the wall it centres on it.
- */
+/** Loaded collision geometry only: a panel must fit wholly on exposed, coplanar support. */
 internal object SpatialFaceClamp {
-
-    /** How far the support search walks before giving up, in blocks. */
-    private const val MAX_WALK = 64
-
+    private const val RADIUS = 8
     /**
-     * Offset to add to the panel centre so its rectangle stays on the face. Zero when it already does.
+     * Distance between a pinned panel and the collision face, in metres.
      *
-     * [yaw]/[pitch] are the pose the panel is *heading* for, not its eased pose: during the snap the
-     * two differ and the clamp has to match the face the panel will end up on.
+     * Public on purpose: `prepare()` derives the expected plane as `x*n + z*n - gap - CLEARANCE`, so
+     * whoever parks the panel has to offset it by exactly this number. A caller with its own, slightly
+     * different clearance missed the plane check by eight millimetres and no panel could be pinned at
+     * all - which reads as "windows stopped sticking to blocks".
      */
-    fun offset(
-        surface: SpatialSurface, yaw: Float, pitch: Float,
-        x: Double, y: Double, z: Double, anchor: SpatialAttachment
-    ): Vector3f {
-        val level = Schizoid.mc.level ?: return Vector3f()
+    internal const val CLEARANCE = .02
+    private const val EPSILON = 1e-5
+
+    /** Immutable support sample: reuse it for a resize gesture's binary search, never across frames. */
+    class Support internal constructor(
+        private val faces: List<SpatialFaceFitGeometry.Rect>,
+        private val blockers: List<SpatialFaceFitGeometry.Rect>,
+        private val seeds: List<SpatialFaceFitGeometry.Rect>,
+        private val rx: Int, private val rz: Int
+    ) {
+        fun offset(surface: SpatialSurface, x: Double, y: Double, z: Double): Vector3f? {
+            val localX = x * rx + z * rz
+            val guard = .0002
+            val fit = SpatialFaceFitGeometry.fitAnchored(faces, blockers, seeds,
+                surface.physicalWidth.toDouble() + guard * 2, surface.physicalHeight.toDouble() + guard * 2,
+                localX, y) ?: return null
+            return Vector3f(((fit.x - localX) * rx).toFloat(), (fit.y - y).toFloat(), ((fit.x - localX) * rz).toFloat())
+        }
+    }
+
+    /** Null means refuse the proposed attachment/edit. Never turn missing support into a zero offset. */
+    fun offset(surface: SpatialSurface, yaw: Float, pitch: Float,
+               x: Double, y: Double, z: Double, anchor: SpatialAttachment): Vector3f? =
+        prepare(yaw, pitch, x, y, z, anchor)?.offset(surface, x, y, z)
+
+    fun prepare(yaw: Float, pitch: Float, x: Double, y: Double, z: Double,
+                anchor: SpatialAttachment): Support? {
+        if (!listOf(x, y, z, yaw.toDouble(), pitch.toDouble(), anchor.gap.toDouble()).all { it.isFinite() } ||
+            anchor.gap !in 0f..4f || abs(pitch) > .0001f) return null
+        val (nx, nz) = when (anchor.face) {
+            "NORTH" -> 0 to -1
+            "SOUTH" -> 0 to 1
+            "WEST" -> -1 to 0
+            "EAST" -> 1 to 0
+            else -> return null
+        }
+        val expectedYaw = kotlin.math.atan2(nx.toDouble(), nz.toDouble()).toFloat()
+        if (abs(SpatialSurface.normalizeAngle(yaw - expectedYaw)) > .0001f) return null
+        val level = Schizoid.mc.level ?: return null
         val origin = BlockPos(anchor.blockX, anchor.blockY, anchor.blockZ)
-        if (!level.isLoaded(origin)) return Vector3f()
-        val rotation = Quaternionf().rotateY(yaw).rotateX(pitch)
-        val right = rotation.transform(Vector3f(1f, 0f, 0f))
-        val up = rotation.transform(Vector3f(0f, 1f, 0f))
-        // Attachments are only made on vertical faces, so the panel's local axes are world axes:
-        // right is horizontal, up is +Y. Everything below can therefore stay one-dimensional.
-        val rightAxis = dominantAxis(right)
-        val upAxis = dominantAxis(up)
-        val negativeRight = walk(level, origin, rightAxis, -1)
-        val positiveRight = walk(level, origin, rightAxis, +1)
-        val negativeUp = walk(level, origin, upAxis, -1)
-        val positiveUp = walk(level, origin, upAxis, +1)
-        val centre = Vector3f(
-            (x - (origin.x + .5)).toFloat(),
-            (y - (origin.y + .5)).toFloat(),
-            (z - (origin.z + .5)).toFloat()
-        )
-        val localX = centre.dot(right)
-        val localY = centre.dot(up)
-        // Express the block run in the panel's own axis signs, since +X is not always +block axis.
-        val signX = signAlong(right, rightAxis)
-        val signY = signAlong(up, upAxis)
-        val minX = if (signX > 0f) -(negativeRight + .5f) else -(positiveRight + .5f)
-        val maxX = if (signX > 0f) (positiveRight + .5f) else (negativeRight + .5f)
-        val minY = if (signY > 0f) -(negativeUp + .5f) else -(positiveUp + .5f)
-        val maxY = if (signY > 0f) (positiveUp + .5f) else (negativeUp + .5f)
-        val targetX = clampAxis(localX, surface.physicalWidth * .5f, minX, maxX)
-        val targetY = clampAxis(localY, surface.physicalHeight * .5f, minY, maxY)
-        if (targetX == localX && targetY == localY) return Vector3f()
-        return Vector3f(right).mul(targetX - localX).fma(targetY - localY, up)
-    }
-
-    /** Slide until the rectangle is inside; if it cannot fit, centre it on the support. */
-    private fun clampAxis(centre: Float, half: Float, min: Float, max: Float): Float {
-        val span = max - min
-        if (!span.isFinite() || span <= 0f || !centre.isFinite() || !half.isFinite()) return centre
-        return if (half * 2f <= span) centre.coerceIn(min + half, max - half) else (min + max) * .5f
-    }
-
-    /** Consecutive supported blocks beyond [origin] along [axis] in [direction] (-1 or +1). */
-    private fun walk(level: Level, origin: BlockPos, axis: BlockPos, direction: Int): Int {
-        var count = 0
-        while (count < MAX_WALK) {
-            val step = count + 1
-            val pos = origin.offset(axis.x * step * direction, axis.y * step * direction, axis.z * step * direction)
-            if (!level.isLoaded(pos) || level.getBlockState(pos).isAir) return count
-            count++
+        if (!level.isLoaded(origin) || !level.isLoaded(origin.offset(-1, 0, 0)) ||
+            !level.isLoaded(origin.offset(1, 0, 0)) || !level.isLoaded(origin.offset(0, 0, -1)) ||
+            !level.isLoaded(origin.offset(0, 0, 1))) return null
+        val rx = nz; val rz = -nx
+        // Signed normal coordinate makes all four vertical faces use the same outward interval test.
+        val proposedPlane = x * nx + z * nz - anchor.gap - CLEARANCE
+        // Anchor the plane to a real collision face, not to an arbitrary proposed world position.
+        // Fractional faces (slabs/stairs) cannot be reconstructed from the block coordinate alone.
+        val planes = level.getBlockState(origin).getCollisionShape(level, origin).toAabbs().map { box ->
+            when {
+                nx > 0 -> origin.x + box.maxX
+                nx < 0 -> -(origin.x + box.minX)
+                nz > 0 -> origin.z + box.maxZ
+                else -> -(origin.z + box.minZ)
+            }
         }
-        return count
-    }
-
-    /** +1 when [vector] points the same way as the block [axis], -1 when it points back. */
-    private fun signAlong(vector: Vector3f, axis: BlockPos): Float {
-        val component = if (axis.x != 0) vector.x else if (axis.y != 0) vector.y else vector.z
-        val direction = if (axis.x != 0) axis.x else if (axis.y != 0) axis.y else axis.z
-        return if (component >= 0f) direction.toFloat() else -direction.toFloat()
-    }
-
-    private fun dominantAxis(vector: Vector3f): BlockPos {
-        val x = abs(vector.x)
-        val y = abs(vector.y)
-        val z = abs(vector.z)
-        return when {
-            x >= y && x >= z -> BlockPos(if (vector.x >= 0f) 1 else -1, 0, 0)
-            y >= x && y >= z -> BlockPos(0, if (vector.y >= 0f) 1 else -1, 0)
-            else -> BlockPos(0, 0, if (vector.z >= 0f) 1 else -1)
+        val plane = planes.minByOrNull { abs(it - proposedPlane) } ?: return null
+        if (abs(plane - proposedPlane) > EPSILON) return null
+        val localX = x * rx + z * rz
+        val faces = ArrayList<SpatialFaceFitGeometry.Rect>()
+        val blockers = ArrayList<SpatialFaceFitGeometry.Rect>()
+        val seeds = ArrayList<SpatialFaceFitGeometry.Rect>()
+        val tangent = floor(localX).toInt()
+        val baseY = floor(y).toInt()
+        val normalStart = floor(plane).toInt() - 1
+        val normalEnd = floor(plane + anchor.gap + CLEARANCE).toInt() + 1
+        // Support is proven by the complete rectangle, not merely by the original anchor block.
+        for (u in tangent - RADIUS..tangent + RADIUS) for (v in baseY - RADIUS..baseY + RADIUS) {
+            for (n in normalStart..normalEnd) {
+                // Reflecting an integer cell maps [n,n+1] to [-n-1,-n], not [-n,-n+1].
+                val bx = if (nx != 0) (if (nx > 0) n else -n - 1) else (if (rx > 0) u else -u - 1)
+                val bz = if (nz != 0) (if (nz > 0) n else -n - 1) else (if (rz > 0) u else -u - 1)
+                val pos = BlockPos(bx, v, bz)
+                // Neither collision lookup nor neighbouring shapes may request an unloaded chunk.
+                if (!level.isLoaded(pos) || !level.isLoaded(pos.offset(-1, 0, 0)) ||
+                    !level.isLoaded(pos.offset(1, 0, 0)) || !level.isLoaded(pos.offset(0, 0, -1)) ||
+                    !level.isLoaded(pos.offset(0, 0, 1))) {
+                    // Unknown outward volume is an obstruction, not empty space. This also prevents a
+                    // loaded support face from being accepted across an unloaded chunk boundary.
+                    if (n + 1 > plane && n < plane + anchor.gap + CLEARANCE)
+                        blockers.add(SpatialFaceFitGeometry.Rect(u.toDouble(), v.toDouble(), u + 1.0, v + 1.0))
+                    continue
+                }
+                for (box in level.getBlockState(pos).getCollisionShape(level, pos).toAabbs()) {
+                    val x0 = bx + box.minX; val x1 = bx + box.maxX
+                    val z0 = bz + box.minZ; val z1 = bz + box.maxZ
+                    val a = if (nx != 0) x0 * nx else z0 * nz
+                    val b = if (nx != 0) x1 * nx else z1 * nz
+                    val low = minOf(a, b); val high = maxOf(a, b)
+                    val c = if (rx != 0) x0 * rx else z0 * rz
+                    val d = if (rx != 0) x1 * rx else z1 * rz
+                    val rect = SpatialFaceFitGeometry.Rect(minOf(c, d), v + box.minY, maxOf(c, d), v + box.maxY)
+                    if (abs(high - plane) <= EPSILON) {
+                        faces.add(rect)
+                        if (pos == origin) seeds.add(rect)
+                    }
+                    if (high > plane + EPSILON && low < plane + anchor.gap + CLEARANCE + EPSILON) blockers.add(rect)
+                }
+            }
         }
+        if (seeds.isEmpty()) return null
+        return Support(faces, blockers, seeds, rx, rz)
     }
 }

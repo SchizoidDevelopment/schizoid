@@ -9,6 +9,8 @@ import dev.lyzev.api.imgui.spatial.SpatialSurface
 import dev.lyzev.api.imgui.spatial.SpatialInputRouter
 import dev.lyzev.api.imgui.spatial.SpatialWorldController
 import dev.lyzev.api.opengl.shader.ShaderSpatialWindow
+import dev.lyzev.api.opengl.shader.ShaderTint
+import dev.lyzev.api.opengl.shader.Shader
 import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.features.module.modules.render.ModuleToggleableBlur
 import net.minecraft.core.BlockPos
@@ -33,56 +35,173 @@ object SpatialWindowRenderer {
     /** Texture the panel shader samples as its backdrop for this frame. */
     private var activeBlurTexture = 0
 
+    // Bounded scratch pool shared by all panels, not retained per surface. Draw each panel immediately
+    // after preparation: the next surface reuses these three textures. Lazily allocated, disposed below.
+    private var effectMask: WrappedFramebuffer? = null
+    private var effectShadow: WrappedFramebuffer? = null
+    private var effectBloom: WrappedFramebuffer? = null
+    private data class Effects(val shadow: Int = 0, val bloom: Int = 0)
+    private val localEffects = SpatialPanelEffects()
+
+    private fun effectTarget(name: String) = WrappedFramebuffer(name, width = 512, height = 512, fixedSize = true)
+
+    /** Real 2D blur kernels and ShaderTint, but with a panel-local silhouette, never the overlay mask. */
+    private fun prepareEffects(canvas: Int, style: SpatialPanelAppearance, shadow: Boolean): Effects = Render.isolated {
+        Render.prepareFullscreen()
+        glDisable(GL_BLEND)
+        val method = localEffects
+        var shadowId = 0
+        var bloomId = 0
+        fun copyBlur(target: WrappedFramebuffer) {
+            // Copy before another method.render: every Blurs entry owns mutable singleton outputs.
+            glDisable(GL_SCISSOR_TEST)
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, method.output.fbo)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target.fbo)
+            glBlitFramebuffer(0, 0, method.output.textureWidth, method.output.textureHeight,
+                0, 0, target.textureWidth, target.textureHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR)
+        }
+        fun tint(target: WrappedFramebuffer, rgb: Boolean, saturation: Int, brightness: Int, multiplier: Float, source: Int = method.output.colorAttachment) {
+            target.beginWrite(true)
+            glDisable(GL_BLEND)
+            ShaderTint.bind()
+            glActiveTexture(GL_TEXTURE0)
+            glBindSampler(0, 0)
+            check(target.colorAttachment != source) { "Spatial tint feedback" }
+            glBindTexture(GL_TEXTURE_2D, source)
+            ShaderTint["Tex0"] = 0
+            ShaderTint["Color"] = Vector3f(0f, 0f, 0f)
+            ShaderTint["RGBPuke"] = rgb
+            ShaderTint.set("SV", saturation / 100f, brightness / 100f)
+            ShaderTint["Opacity"] = 1f
+            ShaderTint["Alpha"] = true
+            ShaderTint["Multiplier"] = multiplier
+            ShaderTint["Time"] = (System.nanoTime() - ShaderTint.initTime) / 1_000_000_000f
+            ShaderTint["Yaw"] = Render.cameraYaw
+            ShaderTint["Pitch"] = Render.cameraPitch
+            Shader.drawFullScreen(restoreState = false)
+            ShaderTint.unbind()
+        }
+        if (shadow && style.shadowEnabled) {
+            val mask = effectMask ?: effectTarget("SpatialEffectMask").also { effectMask = it }
+            val target = effectShadow ?: effectTarget("SpatialEffectShadow").also { effectShadow = it }
+            mask.beginWrite(true)
+            ShaderSpatialWindow.drawQuad(Matrix4f(), canvas, 1f, maskMode = true, shadowScale = style.shadowScale)
+            method.switchStrength(style.shadowRadius)
+            method.render(mask, true)
+            tint(target, style.shadowRgb, ModuleToggleableBlur.dropShadowRGBPukeSaturation,
+                ModuleToggleableBlur.dropShadowRGBPukeBrightness, style.shadowMultiplier)
+            shadowId = target.colorAttachment
+        }
+        if (style.bloomEnabled) {
+            val target = effectBloom ?: effectTarget("SpatialEffectBloom").also { effectBloom = it }
+            method.switchStrength(style.bloomRadius)
+            val mask = effectMask ?: effectTarget("SpatialEffectMask").also { effectMask = it }
+            mask.beginWrite(true)
+            ShaderSpatialWindow.drawQuad(Matrix4f(), canvas, 1f, bloomSourceMode = true, effectScale = style.bloomScale)
+            method.render(mask, true)
+            if (style.bloomDouble) {
+                copyBlur(target) // Never sample method.output while that same method writes it.
+                method.render(target, true)
+            }
+            // Padded premultiplied source/mask, not a second canvas quad. Tint only the blurred halo.
+            if (style.bloomRgb) tint(target, true, ModuleToggleableBlur.RGBPukeSaturation,
+                ModuleToggleableBlur.RGBPukeBrightness, 1f) else copyBlur(target)
+            bloomId = target.colorAttachment
+        }
+        Effects(shadowId, bloomId)
+    }
+
     /** Single source of truth for the shadow quad's oversize; the shader cuts the same mask. */
     const val SHADOW_SCALE = 1.015f
 
     /** Call once per frame before rendering any surfaces. Captures and blurs the current framebuffer. */
     fun captureBlurBackground(sourceWidth: Int, sourceHeight: Int) {
-        val bw = (sourceWidth / 5).coerceIn(64, 512)
-        val bh = (sourceHeight / 5).coerceIn(36, 288)
-        if (blurWidth != bw || blurHeight != bh) {
-            destroyBlurFbo()
-            blurFbo = glGenFramebuffers()
-            blurTexture = glGenTextures()
-            glBindTexture(GL_TEXTURE_2D, blurTexture)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, bw, bh, 0, GL_RGBA, GL_UNSIGNED_BYTE, null as java.nio.ByteBuffer?)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blurFbo)
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, blurTexture, 0)
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
-            blurWidth = bw
-            blurHeight = bh
-        }
+        // Snapshot before allocation: creating the blur FBO temporarily changes the draw binding.
         val readFbo = glGetInteger(GL_READ_FRAMEBUFFER_BINDING)
         val drawFbo = glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING)
         val scissorWasOn = glIsEnabled(GL_SCISSOR_TEST)
-        if (scissorWasOn) glDisable(GL_SCISSOR_TEST)
-        // Read the target the world pass is currently drawing into, not framebuffer 0. The world goes
-        // to Minecraft's main target, so FB0 only holds the previously presented frame (or nothing).
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, drawFbo)
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blurFbo)
-        glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0, 0, bw, bh, GL_COLOR_BUFFER_BIT, GL_LINEAR)
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, readFbo)
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFbo)
-        if (scissorWasOn) glEnable(GL_SCISSOR_TEST)
-        // The Blur module owns what frosted glass looks like in this mod, so when it is on the panels
-        // run the same blur chain over the captured world instead of showing a plain downsample.
-        activeBlurTexture = blurTexture
-        if (ModuleToggleableBlur.isActive) {
-            val method = ModuleToggleableBlur.method.value
-            method.switchStrength(ModuleToggleableBlur.strength)
-            method.render(blurTexture, false)
-            activeBlurTexture = method.output.colorAttachment
+        activeBlurTexture = 0
+        try {
+            val bw = (sourceWidth / 5).coerceIn(64, 512)
+            val bh = (sourceHeight / 5).coerceIn(36, 288)
+            if (blurWidth != bw || blurHeight != bh) {
+                destroyBlurFbo()
+                blurFbo = glGenFramebuffers()
+                blurTexture = glGenTextures()
+                // GL allocation failures report errors rather than throwing: never bind framebuffer 0
+                // as our destination or publish an incomplete texture as the backdrop.
+                if (blurFbo == 0 || blurTexture == 0) {
+                    destroyBlurFbo()
+                    return
+                }
+                glBindTexture(GL_TEXTURE_2D, blurTexture)
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, bw, bh, 0, GL_RGBA, GL_UNSIGNED_BYTE, null as java.nio.ByteBuffer?)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blurFbo)
+                glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, blurTexture, 0)
+                if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                    destroyBlurFbo()
+                    return
+                }
+                blurWidth = bw
+                blurHeight = bh
+            }
+            if (scissorWasOn) glDisable(GL_SCISSOR_TEST)
+            // Read the target the world pass is currently drawing into, not framebuffer 0. The world goes
+            // to Minecraft's main target, so FB0 only holds the previously presented frame (or nothing).
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, drawFbo)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blurFbo)
+            glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0, 0, bw, bh, GL_COLOR_BUFFER_BIT, GL_LINEAR)
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, readFbo)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFbo)
+            if (scissorWasOn) glEnable(GL_SCISSOR_TEST)
+            // The Blur module owns what frosted glass looks like in this mod, so when it is on the panels
+            // run the same blur chain over the captured world instead of showing a plain downsample.
+            if (ModuleToggleableBlur.isActive) {
+                val method = ModuleToggleableBlur.method.value
+                method.switchStrength(ModuleToggleableBlur.strength)
+                method.render(blurTexture, false)
+                // Local effects below reuse method.output; keep the backdrop in our own stable texture.
+                glDisable(GL_SCISSOR_TEST)
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, method.output.fbo)
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blurFbo)
+                glBlitFramebuffer(0, 0, method.output.textureWidth, method.output.textureHeight,
+                    0, 0, bw, bh, GL_COLOR_BUFFER_BIT, GL_LINEAR)
+            } else {
+                // Even with the Blur module off, the glass needs real frost: a plain 5x downsample still
+                // shows leaves and bamboo as readable shapes through the panel, which looks like a dirty
+                // window rather than frosted glass. The panel-local kernels are bounded and shared.
+                localEffects.switchStrength(FROST_STRENGTH)
+                localEffects.render(blurTexture, false)
+                glDisable(GL_SCISSOR_TEST)
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, localEffects.output.fbo)
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blurFbo)
+                glBlitFramebuffer(0, 0, localEffects.output.textureWidth, localEffects.output.textureHeight,
+                    0, 0, bw, bh, GL_COLOR_BUFFER_BIT, GL_LINEAR)
+            }
+            activeBlurTexture = blurTexture
+        } finally {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, readFbo)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFbo)
+            if (scissorWasOn) glEnable(GL_SCISSOR_TEST) else glDisable(GL_SCISSOR_TEST)
         }
     }
 
     fun blurTextureId(): Int = activeBlurTexture
 
+    private const val FROST_STRENGTH = 6
+
     /** Release the shared blur target while the GL context is still alive. */
-    fun dispose() = destroyBlurFbo()
+    fun dispose() {
+        destroyBlurFbo()
+        effectMask?.delete(); effectMask = null
+        effectShadow?.delete(); effectShadow = null
+        effectBloom?.delete(); effectBloom = null
+        localEffects.dispose()
+    }
 
     private fun destroyBlurFbo() {
         if (blurFbo != 0) { glDeleteFramebuffers(blurFbo); blurFbo = 0 }
@@ -170,10 +289,17 @@ object SpatialWindowRenderer {
             }
         }
 
+        val style = ShaderSpatialWindow.appearance()
+        val drawShadow = !surface.isOverlay && distance < 12f && (!style.blurActive || style.shadowEnabled)
+        // Fade the halo out instead of switching it off at a threshold. Walking away from the workspace
+        // made every shadow vanish on one frame, which read as the panels flickering.
+        val shadowFade = (1f - (distance - 8f) / 4f).coerceIn(0f, 1f)
+        val effects = if (style.blurActive && (drawShadow || style.bloomEnabled))
+            prepareEffects(fboTexture, style, drawShadow) else Effects()
         val drawQuad = {
-            // Camera-side furniture (the toolbar) ignores the depth buffer: a leaf or a tree two metres
-            // in front of the player must not eat a bar that is meant to be always on top.
-            if (surface.isOverlay) {
+            // Only the camera-side remote retains its legacy depth bypass. The physical toolbar
+            // belongs to the world and must be occluded by geometry just like the panels.
+            if (surface.isRemote) {
                 glDisable(GL_DEPTH_TEST)
             } else {
                 // Enable depth testing so surfaces are occluded by world geometry.
@@ -197,27 +323,28 @@ object SpatialWindowRenderer {
             val cameraToPanel = Vector3f(rx, ry, rz)
             val canvasFacingCamera = rotation.transform(Vector3f(0f, 0f, 1f)).dot(cameraToPanel) < 0f
 
-            // Drop shadow: offset along the panel normal (local Z), not world Z.
-            val shadowModel = Matrix4f()
-                .translate(rx, ry, rz)
-                .rotate(rotation)
-                // The shadow has to hover with the panel, or it detaches from it as the panel drifts.
-                .translate(sway.swayX, sway.swayY, sway.depthOffset - 0.03f)
-                .scale(surface.physicalWidth * surface.motion.scale * SHADOW_SCALE / 2f,
-                       surface.physicalHeight * surface.motion.scale * SHADOW_SCALE / 2f, 1f)
+            // This is a contact halo, not another plane behind the glass. A normal offset causes
+            // perspective parallax (and reveals a second silhouette through a translucent panel).
+            // Both passes only test scene depth, so sharing the plane cannot cause z-fighting.
+            val shadowModel = Matrix4f(model).scale(style.shadowScale, style.shadowScale, 1f)
             val shadowMvp = Matrix4f(projectionMatrix).mul(viewMatrix).mul(shadowModel)
             // A toolbar hovering at arm's length gets no drop shadow: at that distance the halo is a
             // fat bright-edged ring around a strip, not a shadow.
             // Past a dozen metres the halo is thinner than a pixel: the draw and its uniform upload
             // would be spent on nothing visible.
-            if (!surface.isOverlay && distance < 12f) {
-                ShaderSpatialWindow.drawQuad(shadowMvp, fboTexture, alpha * presence, shadowMode = true, light = light)
+            if (drawShadow) {
+                ShaderSpatialWindow.drawQuad(shadowMvp, fboTexture, alpha * presence * shadowFade, shadowMode = true, light = light,
+                    shadowTexture = effects.shadow, shadowScale = style.shadowScale)
             }
 
-            // A flat quad is uniformly front- or back-facing for a given viewpoint, so exactly one
-            // side can ever rasterize: GL_BACK (set above) keeps whichever side the camera looks at,
-            // and the fragment shader decides canvas vs cover from there. The UI can neither be
-            // hidden nor mirrored by the geometry, whichever side of the panel the camera is on.
+            if (effects.bloom != 0) {
+                val bloomModel = Matrix4f(model).scale(style.bloomScale, style.bloomScale, 1f)
+                val bloomMvp = Matrix4f(projectionMatrix).mul(viewMatrix).mul(bloomModel)
+                ShaderSpatialWindow.drawQuad(bloomMvp, fboTexture, alpha * presence * focus,
+                    bloomMode = true, bloomTexture = effects.bloom, effectScale = style.bloomScale)
+            }
+
+            // Culling is disabled; the shader selects canvas vs cover for this viewpoint.
             ShaderSpatialWindow.drawQuad(
                 mvp, fboTexture, alpha,
                 glowFactor = if (canvasFacingCamera) SpatialInputRouter.glowFactor(surface.id) else 0f,
@@ -248,8 +375,10 @@ object SpatialWindowRenderer {
         // Furniture parked by the camera is always in play; its bake is 200x44 pixels.
         if (surface.isOverlay) return true
         val rotation = Quaternionf().rotateY(surface.yaw).rotateX(surface.pitch)
-        val right = rotation.transform(Vector3f(1f, 0f, 0f)).mul(surface.physicalWidth * SHADOW_SCALE * .5f)
-        val up = rotation.transform(Vector3f(0f, 1f, 0f)).mul(surface.physicalHeight * SHADOW_SCALE * .5f)
+        val appearance = ShaderSpatialWindow.appearance()
+        val extent = maxOf(appearance.shadowScale, appearance.bloomScale)
+        val right = rotation.transform(Vector3f(1f, 0f, 0f)).mul(surface.physicalWidth * extent * .5f)
+        val up = rotation.transform(Vector3f(0f, 1f, 0f)).mul(surface.physicalHeight * extent * .5f)
         val centre = Vector3f(
             (surface.centerX - cameraPosX).toFloat(),
             (surface.centerY - cameraPosY).toFloat(),

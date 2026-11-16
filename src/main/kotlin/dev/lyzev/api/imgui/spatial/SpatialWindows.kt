@@ -68,7 +68,7 @@ data class SpatialSurface(
      * layout is already in place. Docked panels do not idle-sway, or the seam would breathe open.
      */
     internal var dockedTo: String? = null
-    /** Latest `ImGuiIO.wantCaptureKeyboard` from this canvas' bake; read by the input router. */
+    /** Latest `ImGuiIO.wantTextInput` (actual text ownership) from this canvas' bake; read by the input router. */
     internal var wantsKeyboard: Boolean = false
     /** Transient presentation state; never written into the saved world layout. */
     var motion: SpatialWindowMotion = SpatialWindowMotion()
