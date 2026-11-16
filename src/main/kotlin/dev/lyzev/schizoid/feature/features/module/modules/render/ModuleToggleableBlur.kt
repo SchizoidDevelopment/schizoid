@@ -249,7 +249,8 @@ object ModuleToggleableBlur :
         get() = isActive && fog && !mc.gameRenderer.mainCamera().isPanoramicMode
 
     init {
-        on<EventRenderWorld> {
+        // World fog/color grading must run before spatial canvases: never tint or blur their text.
+        on<EventRenderWorld>(dev.lyzev.api.events.Event.Priority.HIGHEST) {
             Render.isolated {
             if (fogRGBPuke) {
                 fbo.clear()
