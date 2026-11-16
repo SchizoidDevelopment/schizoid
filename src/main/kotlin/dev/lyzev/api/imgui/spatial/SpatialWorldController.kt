@@ -72,7 +72,7 @@ object SpatialWorldController {
         if (world === nextWorld && worldKey == nextKey) return
         // The client may already point at a different world (or no world). Save by the old key.
         saveCurrentLayout()
-        if (System.getProperty("schizoid.spatial.autotest") == "dimension") {
+        if (AUTOTEST_DIMENSION) {
             Schizoid.logger.info(
                 "autotest dimension: sync ${worldKey?.dimension} -> ${nextKey?.dimension} " +
                     "wasVisible=$visible surfaces=${SpatialWindows.surfaces.size}"
@@ -526,6 +526,7 @@ object SpatialWorldController {
 
     /** Read once: the panel renderer runs every frame and a property lookup per widget is waste. */
     private val AUTOTEST_CLICK = System.getProperty("schizoid.spatial.autotest") == "click"
+    private val AUTOTEST_DIMENSION = System.getProperty("schizoid.spatial.autotest") == "dimension"
 
     /** Where the workspace is placed in front of the player, in metres. */
     private const val PANEL_DISTANCE = 2.6

@@ -28,6 +28,12 @@ import kotlin.math.sin
 object SpatialWorldHook : EventListener {
     override val shouldHandleEvents = true
     /**
+     * Probe mode, read once. Every probe below used to call System.getProperty in the render loop, which
+     * is a map lookup and a security check per frame per probe for a value that cannot change.
+     */
+    private val autotest: String? = System.getProperty("schizoid.spatial.autotest")
+    private val autotestNight: Boolean = java.lang.Boolean.getBoolean("schizoid.spatial.autotest.night")
+    /**
      * Quit to the title screen and load the same world again, on swap buffers: a disconnect stops world
      * rendering, so a world-frame probe would die at the title screen. Level recreation is queued on
      * the client thread instead of running inside a frame.
@@ -119,7 +125,7 @@ object SpatialWorldHook : EventListener {
         Schizoid.logger.info(
             "spatial build: fan v3 (one pin clearance, no auto-close, clean material, no edge marks)"
         )
-        if (System.getProperty("schizoid.spatial.autotest") == "reload") registerReloadProbe()
+        if (autotest == "reload") registerReloadProbe()
         on<EventRenderWorld> { event ->
             debugFrameCount++
             SpatialWorldController.syncWorld()
@@ -155,7 +161,7 @@ object SpatialWorldHook : EventListener {
             worldFrames = if (Schizoid.mc.level == null || Schizoid.mc.player == null ||
                 Schizoid.mc.gui.screen() != null
             ) 0 else worldFrames + 1
-            if (System.getProperty("schizoid.spatial.autotest") != null && !SpatialWorldController.visible &&
+            if (autotest != null && !SpatialWorldController.visible &&
                 worldFrames > 120 && SpatialWindows.surfaces.none { it.motion.drawable }
             ) SpatialWorldController.toggle()
             // Same hook, "rear" mode: mirror-image twin of the first panel, so one screenshot
@@ -164,7 +170,7 @@ object SpatialWorldHook : EventListener {
             // workspace sits dozens of metres behind and above, tiny and off-axis. Re-park it once the
             // player has settled, otherwise every visual check is a lie.
             if (java.lang.Boolean.getBoolean("schizoid.spatial.freezePlayer") &&
-                System.getProperty("schizoid.spatial.autotest") != null && SpatialWorldController.visible) {
+                autotest != null && SpatialWorldController.visible) {
                 // A screenshot is only comparable between runs when the camera holds still: the test world
                 // drops the player from a height, and a moving camera made every visual check disagree
                 // with the numbers logged for the same frame.
@@ -178,7 +184,7 @@ object SpatialWorldHook : EventListener {
             // (comparing between runs is invalid - the saved player pose drifts between launches).
             // Integration check: the Blur module and Depth Of Field share the Blurs.* singletons, so both
             // enabled in one frame must still produce a sane image rather than two writers fighting.
-            if (System.getProperty("schizoid.spatial.autotest") == "dofblur" && worldFrames == 600) {
+            if (autotest == "dofblur" && worldFrames == 600) {
                 // Internal flags, never `isEnabled`: that is a setting and writes the player's config.
                 dev.lyzev.schizoid.feature.features.module.modules.render.ModuleToggleableBlur.autotestEnabled = true
                 val dof = dev.lyzev.schizoid.feature.features.module.modules.render.ModuleDepthOfField
@@ -191,7 +197,7 @@ object SpatialWorldHook : EventListener {
             // 22 ms to 11 ms over the first six hundred frames, so a before/after boundary placed there
             // measures the streaming, not the module. Two late flips give one in-run A/B with the pose
             // frozen and the geometry identical.
-            if (System.getProperty("schizoid.spatial.autotest") == "dof" && worldFrames == 800) {
+            if (autotest == "dof" && worldFrames == 800) {
                 val dof = dev.lyzev.schizoid.feature.features.module.modules.render.ModuleDepthOfField
                 // Maximum settings: the point of the run is to see that the effect *can* be strong, and
                 // a mild default in a dark jungle is not evidence of anything either way.
@@ -202,7 +208,7 @@ object SpatialWorldHook : EventListener {
             }
             // Four flips, not two: a single off->on boundary cannot tell the module's cost from the world
             // still settling. The pattern has to follow the toggles - a monotone decline is streaming.
-            if (System.getProperty("schizoid.spatial.autotest") == "dof") {
+            if (autotest == "dof") {
                 val dof = dev.lyzev.schizoid.feature.features.module.modules.render.ModuleDepthOfField
                 when (worldFrames) {
                     1200 -> { dof.autotestEnabled = false; Schizoid.logger.info("autotest dof: off (flip 2)") }
@@ -210,14 +216,14 @@ object SpatialWorldHook : EventListener {
                     2000 -> { dof.autotestEnabled = false; Schizoid.logger.info("autotest dof: off (flip 4)") }
                 }
             }
-            if (System.getProperty("schizoid.spatial.autotest") == "blur" && worldFrames == 260) {
+            if (autotest == "blur" && worldFrames == 260) {
                 dev.lyzev.schizoid.feature.features.module.modules.render.ModuleToggleableBlur.autotestEnabled = true
                 Schizoid.logger.info("autotest blur: module active")
             }
             // "dimension" mode: the one state transition nothing has exercised - a dimension change saves
             // the layout under the old key, disposes every canvas/FBO and loads the new dimension's layout.
             // Crash-prone by nature (ImGui contexts, FBOs, pins all get rebuilt), so it deserves a probe.
-            if (System.getProperty("schizoid.spatial.autotest") == "dimension") {
+            if (autotest == "dimension") {
                 when (worldFrames) {
                     320 -> {
                         Schizoid.logger.info(
@@ -247,7 +253,7 @@ object SpatialWorldHook : EventListener {
             // "panelfocus" / "grain" modes: swing one panel parameter through its range on a fixed frame
             // schedule, so both ends can be compared inside a single run (pose frozen, no recentre in
             // between). Values are written straight into the shader class; the user's settings stay put.
-            when (System.getProperty("schizoid.spatial.autotest")) {
+            when (autotest) {
                 "panelfocus" -> dev.lyzev.api.opengl.shader.ShaderSpatialWindow.autotestFocus =
                     if (worldFrames > 700) 1f else 0f
                 "grain" -> dev.lyzev.api.opengl.shader.ShaderSpatialWindow.autotestGrain = when {
@@ -258,7 +264,7 @@ object SpatialWorldHook : EventListener {
             }
             // "cursor" mode: drive the virtual pointer without any OS input, so the pointer-to-canvas
             // path can be checked in CI-ish fashion: aim at a panel, then at empty sky.
-            if (System.getProperty("schizoid.spatial.autotest") == "cursor" && SpatialWorldController.visible) {
+            if (autotest == "cursor" && SpatialWorldController.visible) {
                 when (worldFrames) {
                     200 -> {
                         val surface = SpatialWindows.surfaces.firstOrNull { it.id == "features-right" }
@@ -292,7 +298,7 @@ object SpatialWorldHook : EventListener {
             // the close button's rect is measured by the renderer, projected back to screen pixels, and
             // the router gets an ordinary press/release. A panel that disappears is proof the click went
             // through ImGui and not just into the void.
-            if (System.getProperty("schizoid.spatial.autotest") == "click" && SpatialWorldController.visible) {
+            if (autotest == "click" && SpatialWorldController.visible) {
                 val target = SpatialWindows.surfaces.firstOrNull { it.id == "features-left" }
                 when (worldFrames) {
                     200 -> if (target != null) {
@@ -327,7 +333,7 @@ object SpatialWorldHook : EventListener {
             // "pin" mode: a standing wall in front of the player, then the real carry path runs
             // against it. Without a face in reach a pin cannot be observed at all, and the gesture
             // needs a mouse drag the harness does not have.
-            if (System.getProperty("schizoid.spatial.autotest") == "pin" && SpatialWorldController.visible) {
+            if (autotest == "pin" && SpatialWorldController.visible) {
                 if (!pinWallBuilt && worldFrames > 260) { buildPinWall(); pinWallBuilt = true }
                 if (pinWallBuilt && !pinProbed && worldFrames > 320) {
                     Schizoid.logger.info(SpatialInputRouter.autotestPin(1.6f))
@@ -349,7 +355,7 @@ object SpatialWorldHook : EventListener {
             // "chat" mode: with the workspace open, the player must still be able to type. The router
             // is not the thing vanilla opens chat from (KeyMapping ticks it), so what is verified here
             // is the contract: the chat key and typed characters are never swallowed by a panel.
-            if (System.getProperty("schizoid.spatial.autotest") == "chat" && SpatialWorldController.visible) {
+            if (autotest == "chat" && SpatialWorldController.visible) {
                 val window = Schizoid.mc.window.handle()
                 when (worldFrames) {
                     320 -> {
@@ -383,7 +389,7 @@ object SpatialWorldHook : EventListener {
             }
             // "death" mode: die, sit on the death screen, respawn. The workspace disposes its canvases
             // on every world change, and death is the one transition a player hits without meaning to.
-            if (System.getProperty("schizoid.spatial.autotest") == "death") {
+            if (autotest == "death") {
                 // worldFrames stops while the death screen is up, so this probe keeps its own clock.
                 deathFrames++
                 when (deathFrames) {
@@ -421,7 +427,7 @@ object SpatialWorldHook : EventListener {
             // panel header, the left button goes down through the same onButton path GLFW feeds, the
             // head turns, and the button comes up. Movement is the head, so this is the gesture minus
             // the raw-mouse delta the harness cannot produce.
-            if (System.getProperty("schizoid.spatial.autotest") == "drag" && SpatialWorldController.visible) {
+            if (autotest == "drag" && SpatialWorldController.visible) {
                 val surface = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
                 if (surface != null) {
                     val window = Schizoid.mc.window.handle()
@@ -456,7 +462,7 @@ object SpatialWorldHook : EventListener {
             // "autotest.night=true": one shift to midnight, inside an otherwise normal probe run. One
             // call, not a per-frame treadmill - a repeated time push is what made an earlier day probe
             // useless, and the panel light has to be judged on a frame the game is not fighting.
-            if (java.lang.Boolean.getBoolean("schizoid.spatial.autotest.night") && !nightShifted &&
+            if (autotestNight && !nightShifted &&
                 worldFrames > 340
             ) {
                 nightShifted = true
@@ -468,7 +474,7 @@ object SpatialWorldHook : EventListener {
             // "resize" mode: the panel is blown up past the screen, then the screen-space grip is
             // aimed at and dragged in. This is the case that used to be unreachable: the corner is off
             // screen, so a canvas-space handle could never be grabbed again.
-            if (System.getProperty("schizoid.spatial.autotest") == "resize" && SpatialWorldController.visible) {
+            if (autotest == "resize" && SpatialWorldController.visible) {
                 val surface = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
                 when {
                     surface == null -> Unit
@@ -505,7 +511,7 @@ object SpatialWorldHook : EventListener {
             }
             // "remote" mode: also park the pinned-module panel, which is the one piece of furniture that
             // sits off to the side instead of dead ahead.
-            if (System.getProperty("schizoid.spatial.autotest") == "remote" && SpatialWorldController.visible &&
+            if (autotest == "remote" && SpatialWorldController.visible &&
                 !remoteToggled && worldFrames > 130
             ) {
                 SpatialWorldController.toggleRemoteForAutotest()
@@ -517,7 +523,7 @@ object SpatialWorldHook : EventListener {
             // After the recentre on frame 200, not before: the recentre aims the camera back at the group
             // and used to undo this turn, which made the pips untestable - the harness was lying about the
             // feature rather than the feature being broken.
-            if (System.getProperty("schizoid.spatial.autotest") == "away" && SpatialWorldController.visible &&
+            if (autotest == "away" && SpatialWorldController.visible &&
                 !awayTurned && worldFrames > 240
             ) {
                 Schizoid.mc.player?.let { player -> player.yRot = player.yRot + 150f }
@@ -525,7 +531,7 @@ object SpatialWorldHook : EventListener {
             }
             // The twin has to be cloned from a real panel: cloning the toolbar would park a 44 px strip
             // above a strip and put the cover off screen, which proves nothing.
-            if (System.getProperty("schizoid.spatial.autotest") == "rear" && !rearProbeSpawned &&
+            if (autotest == "rear" && !rearProbeSpawned &&
                 SpatialWorldController.visible && worldFrames > 121
             ) SpatialWindows.surfaces.firstOrNull { !it.isOverlay }?.let { source ->
                 val probe = SpatialWindows.spawn(
@@ -727,7 +733,7 @@ object SpatialWorldHook : EventListener {
                     // after the world pass took the whole client down (EXCEPTION_ACCESS_VIOLATION in
                     // atio6axx.dll), so it lives behind its own autotest modes instead of `debug`:
                     // `autotest=depth` and `autotest=sharpness`.
-                    val probe = System.getProperty("schizoid.spatial.autotest")
+                    val probe = autotest
                     if (probe == "depth") logDepthProbe()
                     // Only after the autotest recentre: before it the camera still turns and the same
                     // screen block covers different geometry, which reads as a change that is not there.
