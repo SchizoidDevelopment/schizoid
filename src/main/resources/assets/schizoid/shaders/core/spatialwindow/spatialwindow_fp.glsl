@@ -157,7 +157,18 @@ void main() {
         // Hug the border: a linear ramp over the whole halo quad read as a fat black frame around the
         // panel instead of a contact shadow underneath it.
         outer *= outer;
-        color = vec4(0.0, 0.0, 0.0, halo * outer * Alpha * ShadowStrength * 0.7);
+        float strength = ShadowStrength * 0.7;
+        // Contact shadow plus a thin warm halo: the halo is what lifts the pane off the world instead
+        // of leaving a black hole in it. It hugs the border too, so the panel gains an edge glow
+        // rather than a grey box around it. The quad blends straight (SRC_ALPHA), so the colour below
+        // is un-premultiplied and the glow amount is carried by alpha.
+        float shadowA = halo * outer * Alpha * strength;
+        float light = halo * pow(outer, 8.0) * 0.35;
+        float outA = max(shadowA, light);
+        vec3 outRgb = light > 0.00001
+            ? vec3(1.0, 0.95, 0.88) * min(1.0, light / max(outA, 0.00001))
+            : vec3(0.0);
+        color = vec4(outRgb, outA);
         if (color.a <= 0.001) discard;
         return;
     }
@@ -213,9 +224,12 @@ void main() {
     float edgeSharpness = 1.0 - materialFocus * 0.75;
     // Warm white edge light, the way a real pane catches a room light: a cool blue outline read as a
     // neon cyberpunk frame and fought the orange accent of the theme.
-    vec3 rimColor = (vec3(1.0, 0.97, 0.92) * hairline * 0.55
+    // Light from above: the top edge of the pane catches more of the room than the bottom does, which
+    // is the cheapest way to say "this slab has an orientation" on an otherwise flat rectangle.
+    float topLit = mix(0.70, 1.20, smoothstep(0.0, 1.0, k.y));
+    vec3 rimColor = (vec3(1.0, 0.97, 0.92) * hairline * 0.60
                    + vec3(1.0, 0.93, 0.84) * rim * 0.30)
-                  * (0.50 + 0.50 * GlowFactor) * pulse * RimStrength * edgeSharpness;
+                  * (0.50 + 0.50 * GlowFactor) * pulse * RimStrength * edgeSharpness * topLit;
 
     // Specular sheen, fixed to the surface. Slow drift is fine; a screen-space band is not.
     float sheen = smoothstep(0.55, 1.0, sin((k.x * 0.75 + k.y * 0.25) * 3.14159 - Time * 0.35)) * SheenStrength

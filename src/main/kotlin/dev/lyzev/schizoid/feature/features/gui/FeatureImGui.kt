@@ -159,7 +159,7 @@ object FeatureImGui : IFeature, EventListener {
     )
     val spatialPanelScale by slider(
         "Panel Scale", "World size of the panels in canvas pixels per metre. Re-scales open panels.",
-        320, 128, 640, onlyUpdateOnRelease = true
+        300, 128, 640, onlyUpdateOnRelease = true
     ) { density -> SpatialWindows.surfaces.forEach { it.pixelsPerMeter = density.toFloat() } }
 
     override val name = "ImGui"

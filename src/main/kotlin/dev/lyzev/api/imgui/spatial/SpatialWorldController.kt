@@ -512,7 +512,7 @@ object SpatialWorldController {
     private val AUTOTEST_CLICK = System.getProperty("schizoid.spatial.autotest") == "click"
 
     /** Where the workspace is placed in front of the player, in metres. */
-    private const val PANEL_DISTANCE = 2.9
+    private const val PANEL_DISTANCE = 2.6
     /** Canvas layout of the two tall side panels, in logical pixels. */
     private const val PANEL_WIDTH = 560f
     private const val PANEL_HEIGHT = 620f
