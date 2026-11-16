@@ -346,6 +346,41 @@ object SpatialWorldHook : EventListener {
                     SpatialWorldController.recenterAfterRespawn()
                 }
             }
+            // "chat" mode: with the workspace open, the player must still be able to type. The router
+            // is not the thing vanilla opens chat from (KeyMapping ticks it), so what is verified here
+            // is the contract: the chat key and typed characters are never swallowed by a panel.
+            if (System.getProperty("schizoid.spatial.autotest") == "chat" && SpatialWorldController.visible) {
+                val window = Schizoid.mc.window.handle()
+                when (worldFrames) {
+                    320 -> {
+                        val chatKey = Schizoid.mc.options.keyChat.key.value
+                        val swallowed = SpatialInputRouter.onKey(window, chatKey, org.lwjgl.glfw.GLFW.GLFW_PRESS, 0)
+                        SpatialInputRouter.onKey(window, chatKey, org.lwjgl.glfw.GLFW.GLFW_RELEASE, 0)
+                        Schizoid.logger.info("autotest chat: T swallowed=$swallowed (want false) visible=${SpatialWorldController.visible}")
+                    }
+                    360 -> {
+                        Schizoid.mc.gui.setScreen(net.minecraft.client.gui.screens.ChatScreen("", false))
+                        val swallowed = listOf('a', 'b', 'c').map {
+                            SpatialInputRouter.onCharacter(window, it.code)
+                        }
+                        val screen = Schizoid.mc.gui.screen()
+                        Schizoid.logger.info(
+                            "autotest chat: chars swallowed=$swallowed (want [false, false, false]) " +
+                                "screen=${screen?.javaClass?.simpleName} visible=${SpatialWorldController.visible}"
+                        )
+                    }
+                    400 -> {
+                        SpatialInputRouter.onKey(window, org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE,
+                            org.lwjgl.glfw.GLFW.GLFW_PRESS, 0)
+                        SpatialInputRouter.onKey(window, org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE,
+                            org.lwjgl.glfw.GLFW.GLFW_RELEASE, 0)
+                        Schizoid.logger.info(
+                            "autotest chat: after escape screen=${Schizoid.mc.gui.screen()?.javaClass?.simpleName} " +
+                                "visible=${SpatialWorldController.visible}"
+                        )
+                    }
+                }
+            }
             // "death" mode: die, sit on the death screen, respawn. The workspace disposes its canvases
             // on every world change, and death is the one transition a player hits without meaning to.
             if (System.getProperty("schizoid.spatial.autotest") == "death") {
