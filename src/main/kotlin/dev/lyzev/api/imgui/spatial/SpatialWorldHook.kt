@@ -32,6 +32,7 @@ object SpatialWorldHook : EventListener {
     private var worldFrames = 0
     private var awayTurned = false
     private var remoteToggled = false
+    private var nightShifted = false
     private var pinWallBuilt = false
     private var pinProbed = false
     private val pinWallBlocks = ArrayList<BlockPos>()
@@ -257,6 +258,18 @@ object SpatialWorldHook : EventListener {
                     pinProbed = true
                 }
                 if (pinProbed && worldFrames == 900) clearPinWall()
+            }
+            // "autotest.night=true": one shift to midnight, inside an otherwise normal probe run. One
+            // call, not a per-frame treadmill - a repeated time push is what made an earlier day probe
+            // useless, and the panel light has to be judged on a frame the game is not fighting.
+            if (java.lang.Boolean.getBoolean("schizoid.spatial.autotest.night") && !nightShifted &&
+                worldFrames > 340
+            ) {
+                nightShifted = true
+                // The client-side clock alone gets overwritten by the integrated server on the next
+                // tick, so ask the server for the time change instead of poking the local level.
+                Schizoid.mc.player?.connection?.sendCommand("time set midnight")
+                Schizoid.logger.info("autotest night: asked the server for midnight")
             }
             // "resize" mode: the panel is blown up past the screen, then the screen-space grip is
             // aimed at and dragged in. This is the case that used to be unreachable: the corner is off
