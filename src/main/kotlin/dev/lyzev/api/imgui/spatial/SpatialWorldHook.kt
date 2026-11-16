@@ -33,6 +33,8 @@ object SpatialWorldHook : EventListener {
      */
     private val autotest: String? = System.getProperty("schizoid.spatial.autotest")
     private val autotestNight: Boolean = java.lang.Boolean.getBoolean("schizoid.spatial.autotest.night")
+    private var resizeSmallBaseline = 0f to 0f
+    private var panelStateLogged = false
     /**
      * Quit to the title screen and load the same world again, on swap buffers: a disconnect stops world
      * rendering, so a world-frame probe would die at the title screen. Level recreation is queued on
@@ -504,6 +506,59 @@ object SpatialWorldHook : EventListener {
                         Schizoid.logger.info(
                             "resize probe: after turn yaw=${Schizoid.mc.player?.yRot} " +
                                 "size=${surface.logicalW.toInt()}x${surface.logicalH.toInt()}"
+                        )
+                        SpatialInputRouter.autotestEndResize()
+                    }
+                }
+            }
+            // "panelstate" mode: what the canvas actually holds, so "the panel looks empty" can be told
+            // apart from "there is nothing in it" without guessing from a screenshot.
+            if (autotest == "panelstate" && SpatialWorldController.visible &&
+                worldFrames == 300 && !panelStateLogged
+            ) {
+                panelStateLogged = true
+                SpatialWindows.surfaces.forEach { surface ->
+                    Schizoid.logger.info(
+                        "panelstate: ${surface.id} size=${surface.logicalW.toInt()}x${surface.logicalH.toInt()} " +
+                            "tabs=${surface.tabs} selected=${surface.selectedTab} " +
+                            "verts=${surface.bakedVertices} frames=${surface.bakedFrames} fault=${surface.bakeFault}"
+                    )
+                }
+            }
+            // "resizesmall" mode: the same gesture on a panel that is NOT blown up past the screen.
+            // The oversized run proves the grip stays reachable when the corner is off screen; this one
+            // proves an ordinary drag outwards grows the panel along the ray instead of jumping, and that
+            // the aspect ratio it started with survives the drag.
+            if (autotest == "resizesmall" && SpatialWorldController.visible) {
+                val surface = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
+                when {
+                    surface == null -> Unit
+                    worldFrames == 300 -> {
+                        resizeSmallBaseline = surface.logicalW to surface.logicalH
+                        Schizoid.logger.info(
+                            "resizesmall probe: baseline ${surface.logicalW.toInt()}x${surface.logicalH.toInt()}"
+                        )
+                    }
+                    worldFrames == 320 -> Schizoid.logger.info(
+                        "resizesmall probe: grip aimed at " + SpatialInputRouter.autotestAimAtGrip(surface)
+                    )
+                    worldFrames == 330 -> Schizoid.logger.info(
+                        "resizesmall probe: began=" + SpatialInputRouter.autotestBeginResize(surface)
+                    )
+                    worldFrames == 340 -> Schizoid.mc.player?.let { player ->
+                        // Away from the panel: a bottom-right grip grows when the crosshair goes down and right.
+                        player.yRot += 9f
+                        player.xRot += 6f
+                    }
+                    worldFrames == 366 -> {
+                        // The contract is additive per axis (initial + ray offset), the way an OS window
+                        // resizes, so the aspect ratio is free to change and asserting on it would be
+                        // inventing a rule the geometry does not have.
+                        val base = resizeSmallBaseline
+                        Schizoid.logger.info(
+                            "resizesmall probe: after ${surface.logicalW.toInt()}x${surface.logicalH.toInt()} " +
+                                "delta=${(surface.logicalW - base.first).toInt()}x" +
+                                (surface.logicalH - base.second).toInt()
                         )
                         SpatialInputRouter.autotestEndResize()
                     }
