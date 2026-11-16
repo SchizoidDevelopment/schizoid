@@ -258,6 +258,44 @@ object SpatialWorldHook : EventListener {
                 }
                 if (pinProbed && worldFrames == 900) clearPinWall()
             }
+            // "resize" mode: the panel is blown up past the screen, then the screen-space grip is
+            // aimed at and dragged in. This is the case that used to be unreachable: the corner is off
+            // screen, so a canvas-space handle could never be grabbed again.
+            if (System.getProperty("schizoid.spatial.autotest") == "resize" && SpatialWorldController.visible) {
+                val surface = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
+                when {
+                    surface == null -> Unit
+                    worldFrames == 300 -> {
+                        surface.logicalW = 2200f
+                        surface.logicalH = 1700f
+                        surface.motion.instant()
+                        Schizoid.logger.info("resize probe: oversized to ${surface.logicalW.toInt()}x${surface.logicalH.toInt()}")
+                    }
+                    worldFrames == 320 -> Schizoid.logger.info(
+                        "resize probe: grip aimed at " + SpatialInputRouter.autotestAimAtGrip(surface)
+                    )
+                    worldFrames == 330 -> Schizoid.logger.info(
+                        "resize probe: began=" + SpatialInputRouter.autotestBeginResize(surface) +
+                            " size=${surface.logicalW.toInt()}x${surface.logicalH.toInt()}"
+                    )
+                    worldFrames == 336 -> Schizoid.logger.info(
+                        "resize probe: before turn yaw=${Schizoid.mc.player?.yRot} " +
+                            "size=${surface.logicalW.toInt()}x${surface.logicalH.toInt()}"
+                    )
+                    worldFrames == 338 -> Schizoid.mc.player?.let { player ->
+                        // Pull the crosshair up and left: that shrinks a bottom-right grip.
+                        player.yRot -= 12f
+                        player.xRot -= 8f
+                    }
+                    worldFrames == 360 -> {
+                        Schizoid.logger.info(
+                            "resize probe: after turn yaw=${Schizoid.mc.player?.yRot} " +
+                                "size=${surface.logicalW.toInt()}x${surface.logicalH.toInt()}"
+                        )
+                        SpatialInputRouter.autotestEndResize()
+                    }
+                }
+            }
             // "remote" mode: also park the pinned-module panel, which is the one piece of furniture that
             // sits off to the side instead of dead ahead.
             if (System.getProperty("schizoid.spatial.autotest") == "remote" && SpatialWorldController.visible &&

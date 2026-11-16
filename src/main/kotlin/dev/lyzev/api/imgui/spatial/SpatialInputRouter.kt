@@ -875,6 +875,44 @@ object SpatialInputRouter {
         surface.motion.tiltX = if (state.candidate == null) (lag.y * .55f).coerceIn(-.06f, .06f) else 0f
     }
 
+    /**
+     * Dev probe, part 1: turn the head so the crosshair sits on the panel's screen-space size grip.
+     *
+     * The grip is a screen affordance, so the only way to reach it without a mouse is to aim at the
+     * pixel it is drawn on. Returns the grip position it aimed at, or null when there is nothing to aim at.
+     */
+    internal fun autotestAimAtGrip(surface: SpatialSurface): Pair<Float, Float>? {
+        val grip = gripScreen(surface) ?: return null
+        val frame = SpatialWorldController.frame ?: return null
+        val window = Schizoid.mc.window
+        if (window.screenWidth <= 0 || window.screenHeight <= 0) return null
+        val ndcX = (grip.first / window.screenWidth) * 2f - 1f
+        val ndcY = 1f - (grip.second / window.screenHeight) * 2f
+        val inverse = Matrix4f(frame.projection).mul(frame.view).invert()
+        val near = inverse.transform(Vector4f(ndcX, ndcY, -1f, 1f))
+        val far = inverse.transform(Vector4f(ndcX, ndcY, 1f, 1f))
+        val dx = (far.x / far.w - near.x / near.w).toDouble()
+        val dy = (far.y / far.w - near.y / near.w).toDouble()
+        val dz = (far.z / far.w - near.z / near.w).toDouble()
+        val length = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+        if (length < 1e-6) return null
+        val player = Schizoid.mc.player ?: return null
+        // Minecraft: yaw grows clockwise from +Z, pitch is positive looking down.
+        player.yRot = Math.toDegrees(atan2(-dx / length, dz / length)).toFloat()
+        player.xRot = Math.toDegrees(-asin((dy / length).coerceIn(-1.0, 1.0))).toFloat()
+        return grip
+    }
+
+    /** Dev probe, part 2: the press on the grip, exactly as the crosshair press would start it. */
+    internal fun autotestBeginResize(surface: SpatialSurface): Boolean = startResize(surface)
+
+    /** Dev probe, part 3: finish the gesture like a release does. */
+    internal fun autotestEndResize() {
+        resize?.let(::updateResize)
+        resize = null
+        captured = null
+    }
+
     /** True while a carried panel is already held against a face; it must then stay rigid. */
     internal fun isPinned(surfaceId: String): Boolean =
         surfaceId == carry?.id && carry?.candidate != null
