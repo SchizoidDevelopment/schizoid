@@ -263,6 +263,19 @@ tasks {
         filesMatching("*.mixins.json") { expand(mutableMapOf("java" to javaVersion.toString())) }
     }
 
+    // The layout persistence check is a plain main() by design: it needs no game, no GL context
+    // and no test framework. Gradle still counts src/test as test sources and refuses to run an
+    // empty `test` task, so the check gets its own task and `check` pulls it in.
+    val spatialLayoutCheck by registering(JavaExec::class) {
+        group = "verification"
+        description = "Runs the standalone spatial layout persistence checks."
+        classpath = sourceSets["test"].runtimeClasspath
+        mainClass.set("dev.lyzev.api.imgui.spatial.SpatialLayoutFilesTest")
+    }
+
+    test { failOnNoDiscoveredTests = false }
+    check { dependsOn(spatialLayoutCheck) }
+
     runClient {
         dependsOn("generateProperties")
         jvmArgs("-Xmx2G", "--enable-native-access=ALL-UNNAMED")
