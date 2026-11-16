@@ -39,6 +39,12 @@ object SpatialWorldHook : EventListener {
     private var debugDrawNanos = 0L
     private var debugCompositeNanos = 0L
     init {
+        // One line per launch, so "which build is this?" is answered by the log and not by guessing:
+        // several sessions have run several clients, and a stale window is easy to mistake for stale
+        // code. Keep it short and stable - it is read by tools/devclient.ps1 runs.
+        Schizoid.logger.info(
+            "spatial build: fan v3 (one pin clearance, no auto-close, clean material, no edge marks)"
+        )
         on<EventRenderWorld> { event ->
             debugFrameCount++
             SpatialWorldController.syncWorld()
@@ -82,13 +88,14 @@ object SpatialWorldHook : EventListener {
             // The test world drops the player from a height, so by the time a screenshot is taken the
             // workspace sits dozens of metres behind and above, tiny and off-axis. Re-park it once the
             // player has settled, otherwise every visual check is a lie.
-            if (System.getProperty("schizoid.spatial.autotest") != null && SpatialWorldController.visible) {
+            if (java.lang.Boolean.getBoolean("schizoid.spatial.freezePlayer") &&
+                System.getProperty("schizoid.spatial.autotest") != null && SpatialWorldController.visible) {
                 // A screenshot is only comparable between runs when the camera holds still: the test world
                 // drops the player from a height, and a moving camera made every visual check disagree
                 // with the numbers logged for the same frame.
                 Schizoid.mc.player?.let { player ->
                     player.setDeltaMovement(0.0, 0.0, 0.0)
-                    player.setNoGravity(true)
+                    // Never persist a gravity override just to capture a screenshot.
                 }
                 if (worldFrames == 200) SpatialWorldController.recenterForAutotest()
             }
@@ -325,10 +332,10 @@ object SpatialWorldHook : EventListener {
                 // A quad nobody can see still costs two draws and a full uniform upload, so it is not
                 // drawn at all. The on-screen test is conservative by a 20% margin, so a panel that
                 // straddles the edge is never dropped.
-                if (!SpatialWorldController.visible && !onScreen[index]) continue
+                if (!onScreen[index]) continue
                 // Closing surfaces keep their last baked canvas; only the composite keeps drawing.
                 // A faulted panel does the same: it shows what it last drew instead of being rebuilt.
-                if (!SpatialWorldController.visible || staggered || surface.bakeFault != null) {
+                if (!SpatialWorldController.visible || !surface.motion.opening || staggered || surface.bakeFault != null) {
                     val compositeStart = System.nanoTime()
                     SpatialWindowRenderer.renderSurface(
                         surface, event.modelViewMat, event.projMat,
@@ -356,7 +363,8 @@ object SpatialWorldHook : EventListener {
                     ImGui.render()
                     debugImGuiNanos += System.nanoTime() - imguiStart
                     // Snapshot the keyboard capture flag here: input callbacks must not touch this context.
-                    surface.wantsKeyboard = io.wantCaptureKeyboard
+                    // Window focus/navigation is not text entry: only an active editor may own keystrokes.
+                    surface.wantsKeyboard = io.wantTextInput
                     surface.bakedVertices = ImGui.getDrawData().totalVtxCount
                     // Widget activation is the only "button press" the canvas can report: a quiet
                     // positional tick makes the panel feel like it is being touched, not clicked
@@ -452,10 +460,15 @@ object SpatialWorldHook : EventListener {
                     // per frame. The ImGui HUD is measured next to it, from its own timer.
                     logFrameBudget(now, spatialMs)
                     debugPassFrames = 0
-                    logDepthProbe()
+                    // Pixel readback is a probe, not logging. On this driver a glReadPixels straight
+                    // after the world pass took the whole client down (EXCEPTION_ACCESS_VIOLATION in
+                    // atio6axx.dll), so it lives behind its own autotest modes instead of `debug`:
+                    // `autotest=depth` and `autotest=sharpness`.
+                    val probe = System.getProperty("schizoid.spatial.autotest")
+                    if (probe == "depth") logDepthProbe()
                     // Only after the autotest recentre: before it the camera still turns and the same
                     // screen block covers different geometry, which reads as a change that is not there.
-                    if (worldFrames > 250) logWorldSharpness()
+                    if (probe == "sharpness" && worldFrames > 250) logWorldSharpness()
                     for ((index, surface) in ordered.withIndex()) {
                         Schizoid.logger.info(
                             "spatial ${surface.id}: visible=${SpatialWorldController.visible} " +
@@ -505,6 +518,12 @@ object SpatialWorldHook : EventListener {
                 org.lwjgl.opengl.GL11.GL_TEXTURE_2D, dev.lyzev.api.opengl.OpenGlBridge.colorTextureId(target), 0
             )
             org.lwjgl.opengl.GL11.glReadBuffer(org.lwjgl.opengl.GL30.GL_COLOR_ATTACHMENT0)
+            // An incomplete read target is undefined behaviour, and this driver (AMD) turns that into an
+            // access violation instead of a GL error: refuse to read rather than take the client down.
+            if (org.lwjgl.opengl.GL30.glCheckFramebufferStatus(org.lwjgl.opengl.GL30.GL_READ_FRAMEBUFFER) !=
+                org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_COMPLETE)
+                return
+            org.lwjgl.opengl.GL11.glPixelStorei(org.lwjgl.opengl.GL11.GL_PACK_ALIGNMENT, 1)
             fun block(fx: Float, fy: Float, size: Int): Double {
                 val w = size.coerceAtMost(target.width - 1)
                 val h = size.coerceAtMost(target.height - 1)
@@ -536,6 +555,7 @@ object SpatialWorldHook : EventListener {
         } catch (failure: Throwable) {
             Schizoid.logger.warn("spatial sharpness probe failed", failure)
         } finally {
+            runCatching { org.lwjgl.opengl.GL11.glPixelStorei(org.lwjgl.opengl.GL11.GL_PACK_ALIGNMENT, 4) }
             runCatching { org.lwjgl.opengl.GL30.glBindFramebuffer(org.lwjgl.opengl.GL30.GL_READ_FRAMEBUFFER, previous) }
         }
     }

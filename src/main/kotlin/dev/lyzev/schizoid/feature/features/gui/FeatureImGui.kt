@@ -110,11 +110,11 @@ object FeatureImGui : IFeature, EventListener {
     // 1:1 to a uniform, so tuning is live from the config screen instead of a recompile.
     val spatialOpacity by slider(
         "Panel Opacity", "How opaque world-space panels are; the canvas is composited over this tint.",
-        0.96f, 0.2f, 1f, 2
+        0.97f, 0.2f, 1f, 2
     )
     val spatialBlur by slider(
         "Panel Blur", "Weight of the frosted backdrop inside a panel. 0 = flat tint.",
-        0.12f, 0f, 0.8f, 2
+        0.45f, 0f, 0.8f, 2
     )
     val spatialRim by slider(
         "Panel Rim Glow", "Strength of the edge highlight on a hovered panel.",
@@ -141,7 +141,7 @@ object FeatureImGui : IFeature, EventListener {
     )
     val spatialCornerRadius by slider(
         "Panel Corner Radius", "Rounded panel corners in UV space.",
-        0.04f, 0f, 0.2f, 2
+        0.05f, 0f, 0.2f, 2
     )
     val spatialShadow by slider(
         "Panel Shadow", "Drop shadow around a panel. The panel itself is cut out of it.",
@@ -153,9 +153,9 @@ object FeatureImGui : IFeature, EventListener {
     )
     val spatialFocus by slider(
         "Focus Blur",
-        "Depth of field across the workspace: the panel under the crosshair stays sharp, the others " +
-            "defocus by how far they are from it. 0 = everything sharp.",
-        0.35f, 0f, 1f, 2
+        "Focus response of glass rim and sheen only. Text stays sharp at every distance, even with " +
+            "saved nonzero values. 0 = no material focus effect; background glass blur is separate.",
+        0f, 0f, 1f, 2
     )
     val spatialPanelScale by slider(
         "Panel Scale", "World size of the panels in canvas pixels per metre. Re-scales open panels.",

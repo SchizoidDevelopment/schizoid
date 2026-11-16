@@ -97,6 +97,11 @@ dependencies {
 
 loom {
     accessWidenerPath = file("src/main/resources/${project.extra["archives_base_name"] as String}.accesswidener")
+    runs {
+        named("client") {
+            providers.gradleProperty("isolatedGameDir").orNull?.let { runDir(it) }
+        }
+    }
     mods {
         create(base.archivesName.get()) {
             sourceSet(sourceSets.main.get())
@@ -273,12 +278,38 @@ tasks {
         mainClass.set("dev.lyzev.api.imgui.spatial.SpatialLayoutFilesTest")
     }
 
+    val spatialInputCheck = register<JavaExec>("spatialInputCheck") {
+        group = "verification"
+        classpath = sourceSets["test"].runtimeClasspath
+        mainClass.set("dev.lyzev.api.imgui.spatial.SpatialInputStateTest")
+    }
+    val spatialRendererCheck = register<JavaExec>("spatialRendererCheck") {
+        group = "verification"
+        classpath = sourceSets["test"].runtimeClasspath
+        mainClass.set("dev.lyzev.api.opengl.SpatialWindowRendererTest")
+        workingDir(projectDir)
+    }
+    val spatialFurnitureCheck = register<JavaExec>("spatialFurnitureCheck") {
+        group = "verification"
+        classpath = sourceSets["test"].runtimeClasspath
+        mainClass.set("dev.lyzev.api.imgui.spatial.SpatialFurnitureGeometryTest")
+    }
+    val spatialFaceFitCheck = register<JavaExec>("spatialFaceFitCheck") {
+        group = "verification"
+        classpath = sourceSets["test"].runtimeClasspath
+        mainClass.set("dev.lyzev.api.imgui.spatial.SpatialFaceFitGeometryTest")
+    }
+    val spatialSpawnCheck = register<JavaExec>("spatialSpawnCheck") {
+        group = "verification"
+        classpath = sourceSets["test"].runtimeClasspath
+        mainClass.set("dev.lyzev.api.imgui.spatial.SpatialSpawnGeometryTest")
+    }
     test { failOnNoDiscoveredTests = false }
-    check { dependsOn(spatialLayoutCheck) }
+    check { dependsOn(spatialLayoutCheck, spatialInputCheck, spatialRendererCheck, spatialFurnitureCheck, spatialFaceFitCheck, spatialSpawnCheck) }
 
     runClient {
         dependsOn("generateProperties")
-        jvmArgs("-Xmx2G", "--enable-native-access=ALL-UNNAMED")
+        jvmArgs("-Xmx1280M", "-XX:ActiveProcessorCount=2", "--enable-native-access=ALL-UNNAMED")
         // Dev affordance: hand the client -D flags without touching the launcher, e.g.
         //   ./gradlew runClient -PgameProp=schizoid.spatial.autotest=rear
         // (the spatial workspace reads schizoid.spatial.autotest for screenshot runs).

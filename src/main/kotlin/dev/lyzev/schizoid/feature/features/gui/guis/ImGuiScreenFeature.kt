@@ -51,6 +51,14 @@ object ImGuiScreenFeature : ImGuiScreen(
     private var waitingForInput = -1L
     private var isWaitingForInput = false
     private const val TIMEOUT = 5000
+    val waitingForKeybind: Boolean get() = isWaitingForInput
+
+    /** Shared initiation for ordinary bind widgets and world canvases. */
+    fun beginKeybindCapture() {
+        if (isWaitingForInput) EventKeybindsResponse(GLFW.GLFW_KEY_UNKNOWN).fire()
+        waitingForInput = System.currentTimeMillis()
+        isWaitingForInput = true
+    }
 
     val search = ImGuiRenderableSearch()
     val devTools = ImGuiRenderableDeveloperTool()
@@ -91,7 +99,7 @@ object ImGuiScreenFeature : ImGuiScreen(
     fun consumeKeybindInput(keyCode: Int): Boolean {
         if (!isWaitingForInput) return false
         isWaitingForInput = false
-        EventKeybindsResponse(keyCode).fire()
+        EventKeybindsResponse(if (keyCode == GLFW.GLFW_KEY_ESCAPE) GLFW.GLFW_KEY_UNKNOWN else keyCode).fire()
         return true
     }
 
@@ -111,9 +119,7 @@ object ImGuiScreenFeature : ImGuiScreen(
 
     override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
         val button = event.button()
-        if (isWaitingForInput) {
-            isWaitingForInput = false
-            EventKeybindsResponse(button).fire()
+        if (consumeKeybindInput(button)) {
             return true
         } else if (keybinds.contains(GLFWKey[button])) {
             search.close()
@@ -133,9 +139,7 @@ object ImGuiScreenFeature : ImGuiScreen(
 
     init {
         on<EventKeybindsRequest> {
-            if (isWaitingForInput) EventKeybindsResponse(GLFW.GLFW_KEY_UNKNOWN).fire()
-            waitingForInput = System.currentTimeMillis()
-            isWaitingForInput = true
+            beginKeybindCapture()
         }
     }
 

@@ -4,6 +4,45 @@
 
 Существующие ImGui-категории и их настоящие настройки становятся отдельными текстурированными плоскостями в пространстве Minecraft, не экранным overlay. Сохраняются поиск, конфиги, русский шрифт, темы и обычный GUI вне мира. Изменения исходников сводит родитель; пользовательские Dawn-моды, миры, аккаунты и конфиги не переписываются.
 
+## Glow v4 и неизменный текст —16 ноября2026
+
+Canvas RGB/alpha больше не меняются decorative shaders: эффекты grain/scan/chroma/vignette/rim/sheen/RGB работают только на материале ДО source-over. World Fog RGB выполняется до spatialGUI. Отдельный padded exterior bloom использует реальные local kernels и не рисует Tex0 второй раз; general RGB Puke окрашивает material+halo. Fade на границе ограниченного1.8× halo — сознательный бюджет, не бесконечная свёртка.
+
+Пульт560×84 с читаемыми командами Скрыть/Открыть · Ко мне · Пины | Сброс? | Закрыть. OffFOV marks — максимум3 штриха6px, alpha.30, merge36px, nearby12m, без стрелок. Старые IDs сохранены.
+
+SHA806516BE4A84755F90C3D4B6A4413F3FEA2EF7E79E6BFAE457FA382C896C6D9E: build5suitesPASS; actualGPU14880opaque glyphchecks maxdelta0,11520AA error≤2.4e-7, actual production exteriorhalo nonzero/interior0/Tex0swap0. Это numeric proof, не визуальная приёмка целого GUI. Общий live input прогон прерван сменойChatScreen, не объявляется PASS.
+
+## Резкость, опоры и верхний пульт — предыдущая итерация16 ноября2026
+
+Canvas defocus удалён, даже сохранённый Focus Blur=1 влияет только на материал, а не текст. Верхняя depth-tested консоль292×64 стоит над верхней world-границей группы с зазором0.08м; кнопки reset с подтверждением, hide/show, recenter, remote, full close. Content скрывается без потери layout и с очисткой native ImGui IO.
+
+Pinned rectangles ограничены loaded exposed collision faces одной edge-connected области выбранной anchor поверхности (holes/blockers учитываются). Oversize attachment отклоняется; resize зажимается с сохранением противоположного угла; внешние density/size edits откатываются к last-valid. Snapshot один на resize, stable validation100ms; изменения опоры могут обнаруживаться с задержкой до100ms.
+
+JAR SHA-256 `372709CD302609C9486E90FE89A0CC6AD4613FB8872036FCC72354F5AEC758B9`: check/assemble и5 standalone suites PASS. Packaged vanilla и Sodium0.9.2 по150/150 runtime assertions, exit0, shader/GL0: approach0.85м + baked canvas + sharp shader contract,3x3 collision fit/lone1x1 refusal, native console hide/show/reset clicks. Не pixel-review, не полный Dawn/Iris, не все native resize сценарии.
+
+## Чат и Blur — предыдущая проверка16 ноября2026
+
+- Без ChatScreen: стандартный прицел и attack indicator Minecraft; pointer всегда центр экрана, перенос по направлению камеры сохранён. Alt не включает свободный курсор.
+- Только в ChatScreen: настоящий OS cursor, панели получают mouse press/scroll по hit и mouse-up своего захвата; СКМ/заголовок переносит панель в фиксированной плоскости, без поворота камеры.
+- Keyboard/text/Enter/Escape принадлежат чату, нижние 16 GUI px поля ввода зарезервированы. Другие экраны vanilla не перехватываются. Переходы экранов отменяют carry/resize без скачка позы, press-owner сохраняется до release.
+- Активный Blur управляет локальной тенью: выбранный kernel, radius, multiplier и RGB; off отключает shadow и frame shadow. Bloom использует локальный blur canvas, double и RGB; исходный текст остаётся резким. Это spatial adaptation: старый 2D pipeline не использовал bloom settings.
+- Local kernels имеют собственные fixed512/128 targets, не window-sized singleton outputs; backbuffer отделён от mutable convolution output, resources освобождаются renderer.dispose. Disabled Blur сохраняет независимый прежний panel fallback.
+
+Проверка текущего chat-native контракта: JAR SHA-256 `2C55D9C21FABC76CE16A5868C970FC13729A216F031ACEC1AFE242BD82A2689C`, check/assemble PASS, standalone vanilla68/68 PASS, actual GPU readback shadow/bloom512 с непустой alpha. Sodium startup/effects readback PASS, полный чатный прогон не подтверждён из-за изменения OS mouse/screen между фазами; источник изменения не установлен. Полный Dawn/Iris и pixel-review не заявляются.
+
+## Предыдущая итерация стабильности — 16 ноября 2026
+
+- Виртуальный курсор сбрасывается при закрытии/потере фокуса; абсолютные координаты vanilla MouseHandler продолжают обновляться, а блокируется только поворот камеры в активном cursor mode. Дублирующий hook lambda/onMove удалён. Focus-loss очищает transient/native IO, сохраняя intent взаимодействия видимого workspace: возврат в окно не оставляет GUI навсегда inert и не вызывает принудительный mouse grab в vanilla меню.
+- Mouse-up освобождает перенос даже если между press/release открылось vanilla-меню; Escape не перехватывается текстовым полем. Прицел вне панелей сохраняет взаимодействие с миром; виртуальный cursor miss не атакует мир.
+- Picking учитывает тот же barrel warp и скруглённую маску, что settled shader; captured widget получает canvas UV, resize остаётся в физических координатах плоскости.
+- Blur capture сохраняет framebuffer до allocation и восстанавливает read/draw bindings в finally; невалидный FBO не публикуется. Shadow coplanar с панелью без перспективного отрыва; backdrop имеет noperspective screen coordinates; alpha-композиция учитывает premultiplied canvas.
+- Нижний рельс привязан к мировому центру группы, не к текущей позиции камеры. Закрывающиеся/test поверхности исключены; пустой якорь фиксирован до смены мира.
+- Автооткрытие GUI больше не обнуляет скорость игрока. Только явный `-Dschizoid.spatial.freezePlayer=true` вместе с autotest включает zero-velocity для снимков; gravity не меняется. Для неподвижного снимка игрок должен стоять на земле.
+- `tools/devclient.ps1` использует отдельные game/home/log, tracked PID+creation time+launch token; нет выбора первого окна Minecraft, массового kill или fallback desktop capture. Требуется заранее подготовленный disposable save Verification.
+- `check` запускает standalone layout/input/renderer/furniture checks; `assemble` по-прежнему не заменяет `check`. CPU/reference PASS не означает визуальный/gameplay PASS.
+
+Историческая проверка предыдущего Alt-контракта (не доказательство текущего чатного режима): SHA-256 `59E1C1A7D96E078E31542C6AB4D10D645D8BE491339F43AAE5D91732C97029DF`, `check assemble --offline -x generateProperties` PASS. Packaged vanilla и Sodium 0.9.2 — по 39/39 assertions, exit 0, 0 sampled GL errors: blur on/off, resize, Pause, flight ascent, measured real button click, close/camera, synthetic backend focus-loss/recovery. Helper отсутствует в выпускном JAR. Полный Dawn/Iris, физический Alt+Tab, HiDPI и визуальная приёмка не заявляются.
+
 ## Поведение
 
 | Элемент | Ожидаемый результат |
@@ -76,6 +115,7 @@ Baseline: грязное дерево на HEAD `ea2a0acc78cf1e6868accc30e089d65
 | `glDisable(GL_CULL_FACE)` для панелей | плоский квад не имеет внутренности; сторону выбирает фрагментный шейдер (`BackFace`) |
 | Векторный юниформ ставить только через `set(name, x, y, z, w)` (`glUniform4f`) | перегрузка `FloatArray` — это `glUniform1fv`; для `vec4` драйвер даёт `GL_INVALID_OPERATION` и цвет не доезжает (панели рендерились чёрными) |
 | Молчащие GL-ошибки ловить `GlProbe.check(stage)` при отладке | «квад просто не видно» почти всегда `GL_INVALID_OPERATION` раньше в том же проходе |
+| Камера-мебель (рельс, пульт) **выводится** из панелей: дистанция = средняя дистанция группы, ppm = `spatialPanelScale`, высота = под нижней кромкой самой низкой панели | зашитые `1.45 м` / `300 ppm` ставили рельс между глазом и стеной стекла — он читался как отдельная карточка в воздухе при любом положении |
 
 ## Эксплуатация и отладка
 
