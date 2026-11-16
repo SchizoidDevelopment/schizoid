@@ -941,6 +941,10 @@ object SpatialInputRouter {
         captured = null
     }
 
+    private val AUTOTEST_RESIZE = System.getProperty("schizoid.spatial.autotest")?.let {
+        it.startsWith("resize") || it == "pinresize"
+    } == true
+
     /** True while a carried panel is already held against a face; it must then stay rigid. */
     internal fun isPinned(surfaceId: String): Boolean =
         surfaceId == carry?.id && carry?.candidate != null
@@ -1071,9 +1075,15 @@ object SpatialInputRouter {
             if (!listOf(proposed.centerX, proposed.centerY, proposed.centerZ).all {
                     it.isFinite() && kotlin.math.abs(it) <= 30_000_000.0 }) return null
             support?.let { snapshot ->
-                val fit = snapshot.offset(proposed, proposed.centerX, proposed.centerY, proposed.centerZ) ?: return null
-                // Keep the opposite corner fixed: do not slide a growing rectangle into another wall bay.
-                if (fit.lengthSquared() > 1e-10f) return null
+                val fit = snapshot.offset(proposed, proposed.centerX, proposed.centerY, proposed.centerZ)
+                if (fit == null || fit.lengthSquared() > 1e-10f) {
+                    if (AUTOTEST_RESIZE) Schizoid.logger.info(
+                        "resize refused: ${w.toInt()}x${h.toInt()} fit=" +
+                            (fit?.let { "${it.x},${it.y},${it.z}" } ?: "null") +
+                            " (no room on the face, or the fixed corner would slide)"
+                    )
+                    return null
+                }
             }
             return proposed
         }
@@ -1082,7 +1092,16 @@ object SpatialInputRouter {
         // size jumped between "as big as the face allows" and "where the pointer is", which reads as
         // the panel randomly shrinking while it is dragged outward. Rejecting an unsupported proposal
         // outright is monotone - it grows until the face ends, and follows the pointer straight back.
-        val accepted = proposal(width, height) ?: return
+        val accepted = proposal(width, height)
+        if (accepted == null) {
+            // Probe-only: "the grip does nothing" has four different causes and they look identical.
+            if (AUTOTEST_RESIZE) Schizoid.logger.info(
+                "resize rejected: want ${width.toInt()}x${height.toInt()} " +
+                    "centre=${initial.centerX.toInt()},${initial.centerY.toInt()},${initial.centerZ.toInt()} " +
+                    "attached=${surface.attachment != null}"
+            )
+            return
+        }
         surface.logicalW = accepted.logicalW; surface.logicalH = accepted.logicalH
         surface.centerX = accepted.centerX; surface.centerY = accepted.centerY; surface.centerZ = accepted.centerZ
     }

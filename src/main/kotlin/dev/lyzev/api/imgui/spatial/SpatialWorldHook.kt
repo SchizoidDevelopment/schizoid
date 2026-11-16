@@ -570,6 +570,48 @@ object SpatialWorldHook : EventListener {
                     }
                 }
             }
+            // "pinresize" mode: a panel screwed to a wall, then dragged bigger than the wall can hold.
+            // The contract is that it grows until the face ends and then stops - not that it jumps to
+            // some size that no longer has support, and not that it silently unpins.
+            if (autotest == "pinresize" && SpatialWorldController.visible) {
+                val surface = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
+                when {
+                    worldFrames == 240 -> buildPinWallOnServer()
+                    worldFrames == 300 -> {
+                        Schizoid.logger.info("pinresize probe: pin -> " + SpatialInputRouter.autotestPin(1.6f))
+                        Schizoid.logger.info(
+                            "pinresize probe: pinned ${surface?.logicalW?.toInt()}x${surface?.logicalH?.toInt()} " +
+                                "attachment=${surface?.attachment}"
+                        )
+                    }
+                    worldFrames == 340 && surface != null -> {
+                        Schizoid.logger.info(
+                            "pinresize probe: grip aimed at " + SpatialInputRouter.autotestAimAtGrip(surface)
+                        )
+                        Schizoid.logger.info("pinresize probe: began=" + SpatialInputRouter.autotestBeginResize(surface))
+                    }
+                    // A slow pull, a few degrees every few frames. One big jump is rejected outright by
+                    // design (the proposal has no support), so the limit is only visible when the drag
+                    // walks up to it the way a hand does.
+                    worldFrames in 350..470 && (worldFrames - 350) % 4 == 0 -> Schizoid.mc.player?.let { player ->
+                        // Outward, but upwards rather than down: if only the downward pull is refused,
+                        // the panel is running out of wall below it, not losing its grip.
+                        player.yRot += 2.5f
+                        player.xRot -= 1.8f
+                    }
+                    worldFrames == 460 -> if (surface != null) Schizoid.logger.info(
+                        "pinresize probe: mid ${surface.logicalW.toInt()}x${surface.logicalH.toInt()} " +
+                            "attachment=${surface.attachment != null}"
+                    )
+                    worldFrames == 480 && surface != null -> {
+                        Schizoid.logger.info(
+                            "pinresize probe: after ${surface.logicalW.toInt()}x${surface.logicalH.toInt()} " +
+                                "attachment=${surface.attachment} visible=${SpatialWorldController.visible}"
+                        )
+                        SpatialInputRouter.autotestEndResize()
+                    }
+                }
+            }
             // "panelstate" mode: what the canvas actually holds, so "the panel looks empty" can be told
             // apart from "there is nothing in it" without guessing from a screenshot.
             if (autotest == "panelstate" && SpatialWorldController.visible &&
@@ -927,7 +969,9 @@ object SpatialWorldHook : EventListener {
         val look = player.lookAngle
         val length = kotlin.math.sqrt(look.x * look.x + look.z * look.z)
         if (length < 1e-4) return
-        val centre = eye.add(look.scale(2.2))
+        // 1.75 m, not 2.2: the pin probe parks the panel at 1.6 m, and a wall further away than the
+        // panel means the pin happily finds some leaf two blocks to the side instead of the wall.
+        val centre = eye.add(look.scale(1.75))
         val px = kotlin.math.floor(centre.x).toInt()
         val py = kotlin.math.floor(centre.y).toInt()
         val pz = kotlin.math.floor(centre.z).toInt()
