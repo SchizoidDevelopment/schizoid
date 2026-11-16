@@ -564,10 +564,17 @@ object SpatialWorldController {
             // read as a shapeless rectangle rather than a piece of furniture.
             val header = ImGui.getWindowPos()
             val band = ImGui.getWindowDrawList()
-            band.addRectFilled(header.x, header.y, header.x + surface.logicalW, header.y + 34f, 0x40000000)
-            band.addRectFilled(header.x, header.y + 34f, header.x + surface.logicalW, header.y + 35.5f, 0x66FF9F0A)
+            band.addRectFilled(header.x, header.y, header.x + surface.logicalW, header.y + 34f, 0x5A000000)
+            // Two pixels of accent, not one: at panel distances a hairline of the theme colour read as a
+            // compression artefact instead of a deliberate separator.
+            // ImGui packs colours as 0xAABBGGRR, so an orange accent is written 0x800A9FFF, not RGBA.
+            band.addRectFilled(header.x, header.y + 34f, header.x + surface.logicalW, header.y + 36f, 0x800A9FFF.toInt())
             OPEN_SANS_BOLD.begin()
+            // Warm off-white instead of the theme's body text colour: the title is the one label on the
+            // panel that must survive a bright world behind it.
+            ImGui.pushStyleColor(ImGuiCol.Text, 0xFFDCE7ED.toInt())
             ImGui.text(surface.displayTitle)
+            ImGui.popStyleColor()
             OPEN_SANS_BOLD.end()
             ImGui.sameLine(headerButtonsX(surface.logicalW))
             if (iconButton(FontAwesomeIcons.Plus, "tabs", "Добавить вкладку")) ImGui.openPopup("all-tabs")
@@ -666,7 +673,7 @@ object SpatialWorldController {
         val fill = if (command == null) 0x00000000 else 0x1AFFFFFF
         ImGui.pushStyleColor(ImGuiCol.Button, fill)
         ImGui.pushStyleColor(ImGuiCol.ButtonHovered, 0x40FFFFFF)
-        ImGui.pushStyleColor(ImGuiCol.ButtonActive, 0x66FF9F0A)
+        ImGui.pushStyleColor(ImGuiCol.ButtonActive, 0x660A9FFF)
         ImGui.pushStyleColor(ImGuiCol.Text, 0xEEFFFFFF.toInt())
         // ### keeps widget identity stable when the reset confirmation label changes.
         val clicked = if (command == null) ImGui.button("$icon##$id", ICON_BUTTON, ICON_BUTTON)
