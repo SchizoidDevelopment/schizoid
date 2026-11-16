@@ -7,6 +7,7 @@ package dev.lyzev.api.imgui.spatial
 
 import dev.lyzev.api.events.EventListener
 import dev.lyzev.api.events.EventRenderWorld
+import dev.lyzev.api.events.EventSwapBuffers
 import dev.lyzev.api.events.on
 import dev.lyzev.api.imgui.ImGuiLoader
 import dev.lyzev.api.opengl.Render
@@ -26,6 +27,66 @@ import kotlin.math.sin
 /** Bakes original controls into independent canvases and composites them in the actual world pass. */
 object SpatialWorldHook : EventListener {
     override val shouldHandleEvents = true
+    /**
+     * Quit to the title screen and load the same world again, on swap buffers: a disconnect stops world
+     * rendering, so a world-frame probe would die at the title screen. Level recreation is queued on
+     * the client thread instead of running inside a frame.
+     *
+     * Driven by what the game is doing rather than by frame numbers: a launch spends an unpredictable
+     * number of frames loading, and any fixed schedule either fires before the world exists or after
+     * the run is already over.
+     */
+    private fun registerReloadProbe() {
+        var phase = 0
+        var armAt = 0
+        on<EventSwapBuffers> {
+            reloadFrames++
+            when (phase) {
+                0 -> if (SpatialWindows.surfaces.isNotEmpty()) {
+                    val panel = SpatialWindows.surfaces.first()
+                    panel.centerX += 2.5
+                    panel.motion.instant()
+                    reloadMark = "%.1f,%.1f,%.1f".format(panel.centerX, panel.centerY, panel.centerZ)
+                    Schizoid.logger.info(
+                        "autotest reload: moved ${panel.id} to $reloadMark, quitting in a second"
+                    )
+                    armAt = reloadFrames + 60
+                    phase = 1
+                }
+                1 -> if (reloadFrames >= armAt) {
+                    Schizoid.logger.info("autotest reload: quitting to title")
+                    Schizoid.mc.execute {
+                        Schizoid.mc.disconnect(net.minecraft.client.gui.screens.TitleScreen(), false)
+                    }
+                    armAt = reloadFrames + 60
+                    phase = 2
+                }
+                2 -> if (reloadFrames >= armAt) {
+                    Schizoid.logger.info(
+                        "autotest reload: at title level=${Schizoid.mc.level != null} " +
+                            "surfaces=${SpatialWindows.surfaces.size} visible=${SpatialWorldController.visible}"
+                    )
+                    Schizoid.mc.execute { Schizoid.mc.createWorldOpenFlows().openWorld("Verification") {} }
+                    phase = 3
+                }
+                3 -> if (Schizoid.mc.level != null) {
+                    armAt = reloadFrames + 240
+                    phase = 4
+                }
+                4 -> if (reloadFrames >= armAt) {
+                    Schizoid.logger.info(
+                        "autotest reload: back surfaces=${SpatialWindows.surfaces.size} " +
+                            "visible=${SpatialWorldController.visible} panel=" +
+                            SpatialWindows.surfaces.firstOrNull()?.let {
+                                "%.1f,%.1f,%.1f".format(it.centerX, it.centerY, it.centerZ)
+                            } + " expected=$reloadMark"
+                    )
+                    phase = 5
+                }
+            }
+        }
+    }
+
     private var previousNanos = System.nanoTime()
     private var rearProbeSpawned = false
     private var lastDebugNanos = 0L
@@ -36,6 +97,8 @@ object SpatialWorldHook : EventListener {
     private var dragStart: Triple<Double, Double, Double>? = null
     private var deathFrames = 0
     private var diedSinceSpawn = false
+    private var reloadFrames = 0
+    private var reloadMark: String? = null
     private var pinWallBuilt = false
     private var pinProbed = false
     private val pinWallBlocks = ArrayList<BlockPos>()
@@ -56,6 +119,7 @@ object SpatialWorldHook : EventListener {
         Schizoid.logger.info(
             "spatial build: fan v3 (one pin clearance, no auto-close, clean material, no edge marks)"
         )
+        if (System.getProperty("schizoid.spatial.autotest") == "reload") registerReloadProbe()
         on<EventRenderWorld> { event ->
             debugFrameCount++
             SpatialWorldController.syncWorld()
