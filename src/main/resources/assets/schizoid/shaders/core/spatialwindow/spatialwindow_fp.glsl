@@ -8,11 +8,21 @@
 precision highp float;
 
 in vec2 uv;
-in vec2 screenPos;
+noperspective in vec2 screenPos;
 out vec4 color;
 
 uniform sampler2D Tex0;
 uniform sampler2D BlurTex;
+uniform sampler2D ShadowTex;
+uniform sampler2D BloomTex;
+uniform float MaskMode;
+uniform float LocalShadow;
+uniform float BloomMode;
+uniform float BloomSourceMode;
+uniform float EffectScale;
+uniform sampler2D MaterialTex;
+uniform float MaterialTintOpacity;
+uniform float BloomTinted;
 uniform float Alpha;
 uniform float GlowFactor;   // 1.0 when hovered, 0.0 otherwise
 uniform float ShadowMode;   // 1.0 = shadow pass, 0.0 = main pass
@@ -31,7 +41,7 @@ uniform float RimStrength;  // hover highlight strength
 uniform float SheenStrength;// glass reflection band strength
 uniform float ShadowStrength;// drop shadow strength
 uniform float ScanlineStrength; // CRT scanlines (0 = off)
-uniform float FocusAperture; // 0 = everything sharp; >0 = depth of field enabled
+uniform float MaterialFocusStrength; // focus changes glass highlights only, never canvas sampling
 uniform float PanelDepth;    // metres from the eye to this panel
 uniform float FocusDepth;    // metres from the eye to the plane in focus
 
@@ -60,38 +70,25 @@ vec2 curved(vec2 c) {
 // there only smears the text the player is reading. The supersample is kept for downscales, where
 // the FBO has no mipmaps and plain bilinear shimmering would turn small glyphs into noise.
 vec4 sampleCanvas(vec2 c) {
-    vec2 foot = max(abs(dFdx(c)), abs(dFdy(c)));
-    if (max(foot.x, foot.y) <= 1.0) return texture(Tex0, c);
-    vec2 dx = dFdx(c) * 0.354;
-    vec2 dy = dFdy(c) * 0.354;
-    return (texture(Tex0, c - dx - dy)
-          + texture(Tex0, c + dx - dy)
-          + texture(Tex0, c - dx + dy)
-          + texture(Tex0, c + dx + dy)) * 0.25;
+    // The footprint branch can diverge within a fragment quad. Resolve gradients before it,
+    // and use explicit gradients for every tap so no derivative is evaluated after divergence.
+    vec2 dcDx = dFdx(c);
+    vec2 dcDy = dFdy(c);
+    vec2 foot = max(abs(dcDx), abs(dcDy)) * vec2(textureSize(Tex0, 0));
+    if (max(foot.x, foot.y) <= 1.0) return textureGrad(Tex0, c, dcDx, dcDy);
+    vec2 dx = dcDx * 0.354;
+    vec2 dy = dcDy * 0.354;
+    return (textureGrad(Tex0, c - dx - dy, dcDx, dcDy)
+          + textureGrad(Tex0, c + dx - dy, dcDx, dcDy)
+          + textureGrad(Tex0, c - dx + dy, dcDx, dcDy)
+          + textureGrad(Tex0, c + dx + dy, dcDx, dcDy)) * 0.25;
 }
 
-// Circle of confusion for this panel, 0 (sharp) .. 1 (fully defocused). Thin lens, expressed with
-// inverse depths so the falloff matches how a real lens behaves: near the focus plane nothing blurs,
-// and the further a panel's depth is from it the harder it goes.
-float circleOfConfusion() {
-    if (FocusAperture <= 0.0001 || PanelDepth <= 0.05 || FocusDepth <= 0.05) return 0.0;
+// Focus is a material cue only. Even legacy nonzero focus settings cannot defocus the canvas.
+float materialFocusFalloff() {
+    if (MaterialFocusStrength <= 0.0001 || PanelDepth <= 0.05 || FocusDepth <= 0.05) return 0.0;
     float difference = abs(1.0 / PanelDepth - 1.0 / FocusDepth);
-    return clamp(difference * FocusAperture, 0.0, 1.0);
-}
-
-// Golden-angle spiral: evenly spaced taps at any radius, no visible ghosting of glyphs.
-vec4 sampleCanvasDefocused(vec2 c, float radius) {
-    if (radius <= 0.00025) return sampleCanvas(c);
-    vec4 sum = sampleCanvas(c);
-    float total = 1.0;
-    for (int i = 0; i < 8; i++) {
-        float t = (float(i) + 0.5) / 8.0;
-        float angle = float(i) * 2.39996323;
-        vec2 offset = vec2(cos(angle), sin(angle)) * (radius * sqrt(t));
-        sum += texture(Tex0, c + offset);
-        total += 1.0;
-    }
-    return sum / total;
+    return clamp(difference * MaterialFocusStrength, 0.0, 1.0);
 }
 
 void main() {
@@ -103,24 +100,58 @@ void main() {
     // curved or rounded panel keeps its bevel where its silhouette is.
     float edgeDistance = 0.5 - max(abs(k.x - 0.5), abs(k.y - 0.5));
 
-    // Rounded corners — fade alpha instead of discard (works with barrel distortion)
-    float cr = CornerRadius;
-    float cornerAlpha = 1.0;
-    if (cr > 0.0) {
-        vec2 d = abs(k - 0.5) - (vec2(0.5) - cr);
-        float dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - cr;
-        cornerAlpha = 1.0 - smoothstep(-0.02, 0.0, dist);
+    // The body and both shadow silhouettes must use the same curved, rounded mask.
+    float cornerAlpha = panelMask(k, 1.0);
+
+    if (BloomMode > 0.5) {
+        // Dedicated exterior pass: never sample/repaint the canvas on enlarged geometry.
+        vec2 panelUv = (uv - 0.5) * EffectScale + 0.5;
+        float cut = panelMask(curved(panelUv), 1.0);
+        vec4 bloom = texture(BloomTex, uv);
+        vec3 straight = BloomTinted > 0.5 ? bloom.rgb :
+            (bloom.a > 0.00001 ? bloom.rgb / bloom.a : vec3(0.0));
+        // Padding boundary fades to zero even for kernels whose clamp-to-edge support is very wide.
+        float margin = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+        float exterior = (1.0 - cut) * smoothstep(0.0, 0.08, margin);
+        color = vec4(straight, bloom.a * exterior * Alpha);
+        return;
+    }
+    if (BloomSourceMode > 0.5) {
+        vec2 panelUv = curved((uv - 0.5) * EffectScale + 0.5);
+        float silhouette = panelMask(panelUv, 1.0);
+        vec4 source = texture(Tex0, clamp(panelUv, 0.0, 1.0));
+        // Source plus neutral emissive material underneath: a full soft silhouette, not glyph outlines.
+        float sourceAlpha = clamp(source.a, 0.0, 1.0);
+        color = vec4((source.rgb + vec3(0.35) * (1.0 - sourceAlpha)) * silhouette, silhouette);
+        return;
+    }
+
+    if (MaskMode > 0.5) {
+        // Same panel coordinate transform as the halo cutout; no baked content or world mask.
+        vec2 panelUv = (uv - 0.5) * ShadowScale + 0.5;
+        float silhouette = panelMask(curved(panelUv), 1.0);
+        color = vec4(vec3(silhouette), silhouette);
+        return;
     }
 
     if (ShadowMode > 0.5) {
         // Cut the window out of its own shadow: the shadow exists only in the halo around the
         // panel. Drawing it under a 0.96-alpha window double-darkened the panel and its rim.
-        float cut = panelMask(uv, ShadowScale);
-        float halo = 1.0 - cut;
+        // Undo the enlarged quad before bending: curvature is defined in panel coordinates.
+        vec2 panelUv = (uv - 0.5) * ShadowScale + 0.5;
+        float cut = panelMask(curved(panelUv), 1.0);
+        float halo = max(panelMask(k, 1.0) - cut, 0.0);
+        if (LocalShadow > 0.5) {
+            vec4 shadow = texture(ShadowTex, uv);
+            // ShaderTint produces straight RGB + multiplied alpha, just like the 2D shadow.
+            color = vec4(shadow.rgb, shadow.a * halo * Alpha * ShadowStrength);
+            if (color.a <= 0.001) discard;
+            return;
+        }
         // Falloff runs outward from the panel border (at 1/ShadowScale of this quad) to the quad's
         // own edge, so the halo is dense at the window and gone at its outer rim. A radial or
         // increasing falloff darkens the corners instead of hugging the panel.
-        vec2 e = abs(uv - 0.5) * 2.0;
+        vec2 e = abs(k - 0.5) * 2.0;
         float border = 1.0 / max(ShadowScale, 1.0);
         float outer = 1.0 - clamp((max(e.x, e.y) - border) / max(1.0 - border, 0.0001), 0.0, 1.0);
         // Hug the border: a linear ramp over the whole halo quad read as a fat black frame around the
@@ -144,44 +175,31 @@ void main() {
         return;
     }
 
-    // VHS glitch — only while the panel is opening or closing, never on a settled surface
+    // Canvas RGBA is immutable. Geometry curvature and footprint filtering only; no animated warp.
+    vec2 sampleUv = k;
+    vec4 content = sampleCanvas(sampleUv);
+    float materialFocus = materialFocusFalloff();
     float animating = 1.0 - Alpha;
-    float lineGlitch = sin(uv.y * 200.0 + Time * 10.0) * animating * 0.004;
-    lineGlitch *= step(0.6, fract(uv.y * 80.0 + sin(Time * 5.0) * 20.0));
-
-    vec2 sampleUv = curved(uv + vec2(lineGlitch, 0.0));
-    float coc = circleOfConfusion();
-    // Kernel radius in UV. The old constant (0.016) turned the whole slider into sub-pixel work: the
-    // arc differs by 0.3 m, so coc at the default focus setting is ~0.02, which came out as 0.6 px on a
-    // 1920 px screen - a control that visibly did nothing. 0.05 with the cap gives ~2 px at the default
-    // and ~6 px at the slider's end, where the defocus reads as defocus instead of noise.
-    vec4 content = sampleCanvasDefocused(sampleUv, min(coc * 0.05, 0.008));
-
-    // Vignette from the bent edges, so distortion does not smear content off the panel
-    content.rgb *= 1.0 - smoothstep(0.88, 1.0, abs(sampleUv.x * 2.0 - 1.0)) * 0.2
-                         - smoothstep(0.88, 1.0, abs(sampleUv.y * 2.0 - 1.0)) * 0.2;
-
-    // Chromatic aberration — same rule: an entrance effect, not a permanent filter on text
-    float chroma = ChromaOffset * animating;
-    if (chroma > 0.00005) {
-        content.r = texture(Tex0, sampleUv + vec2(chroma, 0.0)).r;
-        content.b = texture(Tex0, sampleUv - vec2(chroma, 0.0)).b;
-    }
 
     // Smoked glass. The blurred screen is only an ambient tint, clipped by the same panel mask as
     // the shadow, so nothing of the effect leaks outside the window (and the canvas is not dimmed).
     float inside = panelMask(k, 1.0);
-    vec3 ambient = HasBlur > 0.5 ? texture(BlurTex, screenPos).rgb * BlurWeight * inside : vec3(0.0);
+    // Frosted glass, not a tinted window: the world behind the panel is *inside* the material, blurred,
+    // instead of showing through the body's alpha. Letting the sharp world through (body alpha 0.82)
+    // made bamboo and leaves read straight through the text and the panel looked broken rather than
+    // glassy. One blend decides how much of the room the glass carries.
+    vec3 backdrop = HasBlur > 0.5 ? texture(BlurTex, screenPos).rgb : vec3(0.0);
+    vec3 glass = mix(BGColor.rgb, backdrop * 0.78, HasBlur > 0.5 ? BlurWeight * inside : 0.0);
     // Glass catches light unevenly: the top edge collects a little more and the bottom a little less,
     // so the body reads as a surface with a top instead of a flat black card. Only the body is shaded;
     // the canvas is composited on top untouched, or the text would darken towards the bottom.
     float bodyShade = mix(0.82, 1.12, smoothstep(0.0, 1.0, k.y));
     // The frame's own shadow on the glass: a band just inside the bevel, so the canvas sits *under*
     // the edge instead of being flush with it.
-    float frameShadow = (1.0 - smoothstep(0.0, 0.055, edgeDistance)) * 0.22;
+    float frameShadow = (1.0 - smoothstep(0.0, 0.055, edgeDistance)) * 0.22 * ShadowStrength;
     bodyShade *= 1.0 - frameShadow;
     // Body alpha is resolved once at the end (coverage); the mix only needs rgb here.
-    vec4 bg = vec4(BGColor.rgb * bodyShade + ambient, 1.0);
+    vec4 bg = vec4(glass * bodyShade, 1.0);
 
     // Two bands, the way a slab of glass actually catches light: a bright hairline on the very rim
     // (the cut edge) and a soft wash just inside it (the thickness), not one wide gradient.
@@ -191,39 +209,40 @@ void main() {
     // Every panel carries a lit edge the way the blurred 2D windows do; aiming at one is what adds the
     // pulse. Without the baseline a panel lying in shadow had no edge light at all and read as a hole.
     float pulse = mix(1.0, 1.0 + sin(Time * 3.0) * 0.25, step(0.001, GlowFactor));
-    // The glass edge defocuses with the content: a razor-sharp border around a blurred canvas reads as
-    // two different objects stacked, not one panel behind a lens.
-    float edgeSharpness = 1.0 - coc * 0.75;
-    vec3 rimColor = (vec3(0.62, 0.78, 1.0) * hairline * 0.85
-                   + vec3(0.35, 0.60, 1.0) * rim * 0.55)
+    // Only glass highlights respond to focus; text and glyph coverage remain sharp at every depth.
+    float edgeSharpness = 1.0 - materialFocus * 0.75;
+    // Warm white edge light, the way a real pane catches a room light: a cool blue outline read as a
+    // neon cyberpunk frame and fought the orange accent of the theme.
+    vec3 rimColor = (vec3(1.0, 0.97, 0.92) * hairline * 0.55
+                   + vec3(1.0, 0.93, 0.84) * rim * 0.30)
                   * (0.50 + 0.50 * GlowFactor) * pulse * RimStrength * edgeSharpness;
 
     // Specular sheen, fixed to the surface. Slow drift is fine; a screen-space band is not.
     float sheen = smoothstep(0.55, 1.0, sin((k.x * 0.75 + k.y * 0.25) * 3.14159 - Time * 0.35)) * SheenStrength
-        * (1.0 - coc * 0.6);
+        * (1.0 - materialFocus * 0.6);
     vec3 sheenColor = vec3(1.0, 0.97, 0.9) * sheen;
 
-    // Composite: tinted glass, canvas on top, rim and sheen only where the canvas is empty
-    // Glyph antialiasing is a short alpha ramp. Composited straight over a frosted backdrop a third of
-    // every letter is the blurred world, which reads as broken text; bias the ramp towards opaque so
-    // the canvas wins against the backdrop while the outer edge stays smooth.
-    float canvasAlpha = smoothstep(0.0, 0.72, content.a);
-    color = mix(bg, content, canvasAlpha);
-    color.rgb += rimColor * (1.0 - canvasAlpha) + sheenColor * (1.0 - canvasAlpha * 0.5);
-    // A hairline of edge light survives even where the canvas paints: it reads as the panel's cut edge.
-    color.rgb += rimColor * hairline * canvasAlpha * 0.35;
-
-    // CRT scanlines — off unless the slider is raised; keyed to screen pixels so they cannot moire
-    color.rgb += sin(gl_FragCoord.y * 3.14159 + Time * 2.0) * ScanlineStrength;
-
-    // Film grain keyed to screen pixels so it does not crawl when the panel moves
+    // Every decorative effect belongs to the material, before sharp premultiplied source-over.
+    float vignette = 1.0 - smoothstep(0.88, 1.0, abs(k.x * 2.0 - 1.0)) * 0.2
+                            - smoothstep(0.88, 1.0, abs(k.y * 2.0 - 1.0)) * 0.2;
+    bg.rgb *= vignette;
+    if (MaterialTintOpacity > 0.0001) bg.rgb = mix(bg.rgb, texture(MaterialTex, k).rgb, MaterialTintOpacity);
+    float chroma = ChromaOffset * animating;
+    if (HasBlur > 0.5 && chroma > 0.00005) {
+        bg.r += (texture(BlurTex, screenPos + vec2(chroma, 0.0)).r - texture(BlurTex, screenPos).r) * BlurWeight;
+        bg.b += (texture(BlurTex, screenPos - vec2(chroma, 0.0)).b - texture(BlurTex, screenPos).b) * BlurWeight;
+    }    bg.rgb += rimColor + sheenColor;
+    bg.rgb += sin(gl_FragCoord.y * 3.14159 + Time * 2.0) * ScanlineStrength;
     float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-    color.rgb += (grain - 0.5) * GrainAmount;
+    bg.rgb += (grain - 0.5) * GrainAmount;
+    bg.rgb = max(bg.rgb, vec3(0.0));
 
-    // Straight-alpha output: the composite blends with GL_SRC_ALPHA, so only the coverage is faded
-    // here; scaling rgb too would double-apply the fade. Coverage is the canvas where it paints and
-    // the glass body (Opacity) elsewhere — without that term the body is always fully opaque and the
-    // "Panel Opacity" slider has no effect.
-    float coverage = canvasAlpha + Opacity * (1.0 - canvasAlpha);
+    // The only canvas contribution is its original premultiplied RGB and original coverage.
+    float canvasAlpha = clamp(content.a, 0.0, 1.0);
+    float bodyAlpha = clamp(Opacity, 0.0, 1.0);
+    float coverage = canvasAlpha + bodyAlpha * (1.0 - canvasAlpha);
+    vec3 composite = content.rgb + bg.rgb * bodyAlpha * (1.0 - canvasAlpha);
+    color = vec4(coverage > 0.00001 ? composite / coverage : vec3(0.0), coverage);
+    // Geometry/lifecycle coverage fades once; never premultiply the sharp source a second time.
     color.a = cornerAlpha * Alpha * coverage;
 }

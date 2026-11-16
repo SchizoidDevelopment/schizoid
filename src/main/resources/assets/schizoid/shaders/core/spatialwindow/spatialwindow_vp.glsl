@@ -11,7 +11,7 @@ uniform mat4 MVP;
 
 in vec2 position;
 out vec2 uv;
-out vec2 screenPos;
+noperspective out vec2 screenPos;
 
 void main() {
     vec4 clip = MVP * vec4(position, 0.0, 1.0);

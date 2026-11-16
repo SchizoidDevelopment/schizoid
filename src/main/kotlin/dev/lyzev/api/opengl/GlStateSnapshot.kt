@@ -35,7 +35,7 @@ class GlStateSnapshot private constructor() {
     private val viewport = IntArray(4).also { glGetIntegerv(GL_VIEWPORT, it) }
     private val scissorBox = IntArray(4).also { glGetIntegerv(GL_SCISSOR_BOX, it) }
     private val activeTexture = glGetInteger(GL_ACTIVE_TEXTURE)
-    private val textureUnits = (listOf(0, 1, 2, 3) + (activeTexture - GL_TEXTURE0)).distinct()
+    private val textureUnits = (listOf(0, 1, 2, 3, 4) + (activeTexture - GL_TEXTURE0)).distinct()
     private val textures = textureUnits.map { unit ->
         glActiveTexture(GL_TEXTURE0 + unit)
         TextureBinding(unit, glGetInteger(GL_TEXTURE_BINDING_2D), glGetIntegeri(GL_SAMPLER_BINDING, unit))
