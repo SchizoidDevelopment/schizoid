@@ -881,13 +881,41 @@ object SpatialInputRouter {
      * The grip is a screen affordance, so the only way to reach it without a mouse is to aim at the
      * pixel it is drawn on. Returns the grip position it aimed at, or null when there is nothing to aim at.
      */
-    internal fun autotestAimAtGrip(surface: SpatialSurface): Pair<Float, Float>? {
-        val grip = gripScreen(surface) ?: return null
+    internal fun autotestAimAtGrip(surface: SpatialSurface): Pair<Float, Float>? =
+        gripScreen(surface)?.let { (x, y) -> autotestAimAtPixel(x, y)?.let { _ -> x to y } }
+
+    /**
+     * Dev probe: point the head at a spot on the panel given in canvas fractions (0..1, y down).
+     * A panel's header is a canvas affordance like the grip, so a synthetic drag has to aim at it.
+     */
+    internal fun autotestAimAtCanvas(surface: SpatialSurface, fx: Float, fy: Float): Pair<Float, Float>? {
         val frame = SpatialWorldController.frame ?: return null
         val window = Schizoid.mc.window
         if (window.screenWidth <= 0 || window.screenHeight <= 0) return null
-        val ndcX = (grip.first / window.screenWidth) * 2f - 1f
-        val ndcY = 1f - (grip.second / window.screenHeight) * 2f
+        val rotation = Quaternionf().rotateY(surface.yaw).rotateX(surface.pitch)
+        val local = Vector3f(
+            (fx - 0.5f) * surface.physicalWidth,
+            (0.5f - fy) * surface.physicalHeight,
+            0f
+        )
+        val world = Vector3f((surface.centerX - frame.x).toFloat(),
+            (surface.centerY - frame.y).toFloat(), (surface.centerZ - frame.z).toFloat())
+            .add(rotation.transform(local))
+        val point = Vector4f(world.x, world.y, world.z, 1f)
+        Matrix4f(frame.projection).mul(frame.view).transform(point)
+        if (point.w <= 0.0001f) return null
+        val px = (point.x / point.w * 0.5f + 0.5f) * window.screenWidth
+        val py = (0.5f - point.y / point.w * 0.5f) * window.screenHeight
+        return autotestAimAtPixel(px, py)
+    }
+
+    /** Turn the head so the crosshair sits on a screen pixel; returns that pixel. */
+    internal fun autotestAimAtPixel(px: Float, py: Float): Pair<Float, Float>? {
+        val frame = SpatialWorldController.frame ?: return null
+        val window = Schizoid.mc.window
+        if (window.screenWidth <= 0 || window.screenHeight <= 0) return null
+        val ndcX = (px / window.screenWidth) * 2f - 1f
+        val ndcY = 1f - (py / window.screenHeight) * 2f
         val inverse = Matrix4f(frame.projection).mul(frame.view).invert()
         val near = inverse.transform(Vector4f(ndcX, ndcY, -1f, 1f))
         val far = inverse.transform(Vector4f(ndcX, ndcY, 1f, 1f))
@@ -900,7 +928,7 @@ object SpatialInputRouter {
         // Minecraft: yaw grows clockwise from +Z, pitch is positive looking down.
         player.yRot = Math.toDegrees(atan2(-dx / length, dz / length)).toFloat()
         player.xRot = Math.toDegrees(-asin((dy / length).coerceIn(-1.0, 1.0))).toFloat()
-        return grip
+        return px to py
     }
 
     /** Dev probe, part 2: the press on the grip, exactly as the crosshair press would start it. */

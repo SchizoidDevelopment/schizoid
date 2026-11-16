@@ -33,6 +33,7 @@ object SpatialWorldHook : EventListener {
     private var awayTurned = false
     private var remoteToggled = false
     private var nightShifted = false
+    private var dragStart: Triple<Double, Double, Double>? = null
     private var pinWallBuilt = false
     private var pinProbed = false
     private val pinWallBlocks = ArrayList<BlockPos>()
@@ -258,6 +259,42 @@ object SpatialWorldHook : EventListener {
                     pinProbed = true
                 }
                 if (pinProbed && worldFrames == 900) clearPinWall()
+            }
+            // "drag" mode: the whole move gesture with a real mouse button. The head is aimed at the
+            // panel header, the left button goes down through the same onButton path GLFW feeds, the
+            // head turns, and the button comes up. Movement is the head, so this is the gesture minus
+            // the raw-mouse delta the harness cannot produce.
+            if (System.getProperty("schizoid.spatial.autotest") == "drag" && SpatialWorldController.visible) {
+                val surface = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
+                if (surface != null) {
+                    val window = Schizoid.mc.window.handle()
+                    when (worldFrames) {
+                        300 -> {
+                            dragStart = Triple(surface.centerX, surface.centerY, surface.centerZ)
+                            Schizoid.logger.info(
+                                "drag probe: aimed at header " + SpatialInputRouter.autotestAimAtCanvas(
+                                    surface, 0.5f, 17f / surface.logicalH
+                                )
+                            )
+                        }
+                        320 -> Schizoid.logger.info(
+                            "drag probe: press=" + SpatialInputRouter.onButton(
+                                window, 0, org.lwjgl.glfw.GLFW.GLFW_PRESS, 0
+                            ) + " carrying=" + SpatialInputRouter.carrying
+                        )
+                        336 -> Schizoid.mc.player?.let { it.yRot -= 9f }
+                        352 -> {
+                            SpatialInputRouter.onButton(window, 0, org.lwjgl.glfw.GLFW.GLFW_RELEASE, 0)
+                            val start = dragStart
+                            Schizoid.logger.info(
+                                "drag probe: moved dx=" + (start?.let { surface.centerX - it.first }) +
+                                    " dy=" + (start?.let { surface.centerY - it.second }) +
+                                    " dz=" + (start?.let { surface.centerZ - it.third }) +
+                                    " attachment=" + surface.attachment
+                            )
+                        }
+                    }
+                }
             }
             // "autotest.night=true": one shift to midnight, inside an otherwise normal probe run. One
             // call, not a per-frame treadmill - a repeated time push is what made an earlier day probe
