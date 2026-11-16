@@ -34,6 +34,8 @@ object SpatialWorldHook : EventListener {
     private var remoteToggled = false
     private var nightShifted = false
     private var dragStart: Triple<Double, Double, Double>? = null
+    private var deathFrames = 0
+    private var diedSinceSpawn = false
     private var pinWallBuilt = false
     private var pinProbed = false
     private val pinWallBlocks = ArrayList<BlockPos>()
@@ -163,9 +165,18 @@ object SpatialWorldHook : EventListener {
                         // behind geometry.
                         Schizoid.mc.player?.connection?.sendCommand("execute in minecraft:the_nether run tp @s 0 150 0")
                     }
-                    700 -> Schizoid.logger.info(
+                    // Reopen after the teleport has landed: this is what a player does when they arrive
+                    // in a new dimension and press the workspace key. Opening before the tp (which the
+                    // autotest hook does on its own) parks the panels at the portal, not at the player.
+                    400 -> if (SpatialWorldController.visible) SpatialWorldController.toggle()
+                    430 -> if (!SpatialWorldController.visible) SpatialWorldController.toggle()
+                    700, 760 -> Schizoid.logger.info(
                         "autotest dimension: after key=${SpatialWindowStore.currentKey()} " +
-                            "surfaces=${SpatialWindows.surfaces.size} visible=${SpatialWorldController.visible}"
+                            "surfaces=${SpatialWindows.surfaces.size} visible=${SpatialWorldController.visible} " +
+                            "player=${Schizoid.mc.player?.let { "%.1f,%.1f,%.1f".format(it.x, it.y, it.z) }} " +
+                            "panel=${SpatialWindows.surfaces.firstOrNull()?.let {
+                                "%.1f,%.1f,%.1f".format(it.centerX, it.centerY, it.centerZ)
+                            }} drawable=${SpatialWindows.surfaces.count { it.motion.drawable }}"
                     )
                 }
             }
@@ -259,6 +270,53 @@ object SpatialWorldHook : EventListener {
                     pinProbed = true
                 }
                 if (pinProbed && worldFrames == 900) clearPinWall()
+            }
+            // Respawn guard: a player who died and came back somewhere else must not be left staring
+            // at empty sky where the panels used to be. Cheap, runs every frame, only acts on the
+            // alive-after-death edge.
+            Schizoid.mc.player?.let { player ->
+                if (!player.isAlive) {
+                    diedSinceSpawn = true
+                } else if (diedSinceSpawn) {
+                    diedSinceSpawn = false
+                    SpatialWorldController.recenterAfterRespawn()
+                }
+            }
+            // "death" mode: die, sit on the death screen, respawn. The workspace disposes its canvases
+            // on every world change, and death is the one transition a player hits without meaning to.
+            if (System.getProperty("schizoid.spatial.autotest") == "death") {
+                // worldFrames stops while the death screen is up, so this probe keeps its own clock.
+                deathFrames++
+                when (deathFrames) {
+                    240 -> {
+                        Schizoid.logger.info(
+                            "autotest death: before surfaces=${SpatialWindows.surfaces.size} " +
+                                "visible=${SpatialWorldController.visible}"
+                        )
+                        Schizoid.mc.player?.connection?.sendCommand("kill")
+                    }
+                    300 -> Schizoid.logger.info(
+                        "autotest death: dead screen=${Schizoid.mc.gui.screen()?.javaClass?.simpleName} " +
+                            "surfaces=${SpatialWindows.surfaces.size} visible=${SpatialWorldController.visible}"
+                    )
+                    340 -> {
+                        Schizoid.mc.player?.connection?.send(
+                            net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
+                                net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN
+                            )
+                        )
+                        Schizoid.logger.info("autotest death: respawn requested")
+                    }
+                    380 -> if (!SpatialWorldController.visible) SpatialWorldController.toggle()
+                    440 -> Schizoid.logger.info(
+                        "autotest death: after screen=${Schizoid.mc.gui.screen()?.javaClass?.simpleName} " +
+                            "surfaces=${SpatialWindows.surfaces.size} visible=${SpatialWorldController.visible} " +
+                            "player=${Schizoid.mc.player?.let { "%.1f,%.1f,%.1f".format(it.x, it.y, it.z) }} " +
+                            "panel=${SpatialWindows.surfaces.firstOrNull()?.let {
+                                "%.1f,%.1f,%.1f".format(it.centerX, it.centerY, it.centerZ)
+                            }}"
+                    )
+                }
             }
             // "drag" mode: the whole move gesture with a real mouse button. The head is aimed at the
             // panel header, the left button goes down through the same onButton path GLFW feeds, the

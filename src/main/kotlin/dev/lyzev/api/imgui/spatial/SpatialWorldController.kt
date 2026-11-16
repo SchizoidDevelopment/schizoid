@@ -72,6 +72,12 @@ object SpatialWorldController {
         if (world === nextWorld && worldKey == nextKey) return
         // The client may already point at a different world (or no world). Save by the old key.
         saveCurrentLayout()
+        if (System.getProperty("schizoid.spatial.autotest") == "dimension") {
+            Schizoid.logger.info(
+                "autotest dimension: sync ${worldKey?.dimension} -> ${nextKey?.dimension} " +
+                    "wasVisible=$visible surfaces=${SpatialWindows.surfaces.size}"
+            )
+        }
         visible = false
         contentVisible = false
         armedResetUntil = 0L
@@ -193,6 +199,16 @@ object SpatialWorldController {
             surface.pitch = (-kotlin.math.asin(normal.y.toDouble().coerceIn(-1.0, 1.0))).toFloat()
             surface.attachment = null
         }
+    }
+
+    /**
+     * A respawn puts the player back at the spawn point, often dozens of metres from where the panels
+     * were left. The workspace is still open, so without this the player looks up at nothing and
+     * concludes the mod broke. Same rule as reopening by hand: move the group only when it is lost.
+     */
+    internal fun recenterAfterRespawn() {
+        val camera = frame ?: return
+        if (visible) recenterInFront(camera)
     }
 
     /** Dev harness only: same path the toolbar button takes. */
