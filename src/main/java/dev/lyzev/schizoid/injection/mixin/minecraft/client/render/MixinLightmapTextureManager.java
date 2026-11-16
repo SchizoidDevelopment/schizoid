@@ -5,18 +5,20 @@
 
 package dev.lyzev.schizoid.injection.mixin.minecraft.client.render;
 
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
-import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.lyzev.api.events.EventGamma;
-import net.minecraft.client.render.LightmapTextureManager;
+import net.minecraft.client.renderer.LightmapRenderStateExtractor;
+import net.minecraft.client.renderer.state.LightmapRenderState;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * This class provides a mixin for the LightmapTextureManager class in the Minecraft client render package.
  * It modifies the behavior of the update method of the LightmapTextureManager class.
  */
-@Mixin(LightmapTextureManager.class)
+@Mixin(LightmapRenderStateExtractor.class)
 public class MixinLightmapTextureManager {
 
     /**
@@ -27,10 +29,10 @@ public class MixinLightmapTextureManager {
      * @param instance The instance of the SimpleOption class.
      * @return The gamma value of the event.
      */
-    @WrapOperation(method = "update(F)V", at = @At(value = "INVOKE", target = "Ljava/lang/Double;floatValue()F", ordinal = 1))
-    private float onUpdate(Double instance, Operation<Float> original) {
-        EventGamma event = new EventGamma(original.call(instance));
+    @Inject(method = "extract", at = @At(value = "FIELD", target = "Lnet/minecraft/client/renderer/state/LightmapRenderState;brightness:F", opcode = Opcodes.PUTFIELD, shift = At.Shift.AFTER))
+    private void onExtractBrightness(LightmapRenderState state, float tickDelta, CallbackInfo ci) {
+        EventGamma event = new EventGamma(state.brightness);
         event.fire();
-        return event.getGamma();
+        state.brightness = event.getGamma();
     }
 }

@@ -33,7 +33,7 @@ layout(rgba32f, binding = 0) uniform image2D Img0;
 #define PI 3.14159265359
 #define MAX_SPEED 8.91
 
-#include "Noise.glsl"
+#include "noise.glsl"
 
 void main() {
     Particle p = particles[gl_LocalInvocationIndex + ArrayOffset];

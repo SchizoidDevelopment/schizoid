@@ -1,20 +1,14 @@
-accessWidener v2 named
-accessible method net/minecraft/entity/Entity movementInputToVelocity (Lnet/minecraft/util/math/Vec3d;FF)Lnet/minecraft/util/math/Vec3d;
-mutable field net/minecraft/network/packet/s2c/play/WorldTimeUpdateS2CPacket timeOfDay J
-accessible field net/minecraft/network/packet/s2c/play/WorldTimeUpdateS2CPacket timeOfDay J
-#accessible field net/minecraft/client/render/RenderTickCounter tickTime F
-#accessible field net/minecraft/client/MinecraftClient renderTickCounter Lnet/minecraft/client/render/RenderTickCounter;
-accessible field net/minecraft/client/MinecraftClient paused Z
-#accessible field net/minecraft/client/MinecraftClient pausedTickDelta F
-accessible field net/minecraft/client/gui/screen/ingame/CreativeInventoryScreen selectedTab Lnet/minecraft/item/ItemGroup;
-accessible field net/minecraft/client/option/KeyBinding boundKey Lnet/minecraft/client/util/InputUtil$Key;
-mutable field net/minecraft/entity/TntEntity DEFAULT_FUSE I
-accessible field net/minecraft/entity/TntEntity DEFAULT_FUSE I
-accessible field net/minecraft/client/Mouse cursorDeltaX D
-accessible field net/minecraft/client/Mouse cursorDeltaY D
-accessible field net/minecraft/client/network/ClientPlayerEntity lastYaw F
-accessible field net/minecraft/client/network/ClientPlayerEntity lastPitch F
-accessible method net/minecraft/client/network/PlayerListEntry texturesSupplier (Lcom/mojang/authlib/GameProfile;)Ljava/util/function/Supplier;
-accessible class net/minecraft/client/texture/PlayerSkinProvider$FileCache
-accessible method net/minecraft/client/render/GameRenderer getFov (Lnet/minecraft/client/render/Camera;FZ)D
-accessible field net/minecraft/client/option/KeyBinding timesPressed I
+accessWidener v2 official
+accessible method net/minecraft/world/entity/Entity getInputVector (Lnet/minecraft/world/phys/Vec3;FF)Lnet/minecraft/world/phys/Vec3;
+accessible field net/minecraft/client/Minecraft pause Z
+accessible field net/minecraft/client/gui/screens/inventory/CreativeModeInventoryScreen selectedTab Lnet/minecraft/world/item/CreativeModeTab;
+accessible field net/minecraft/client/KeyMapping key Lcom/mojang/blaze3d/platform/InputConstants$Key;
+accessible field net/minecraft/client/MouseHandler accumulatedDX D
+accessible field net/minecraft/client/MouseHandler accumulatedDY D
+accessible field net/minecraft/client/player/LocalPlayer yRotLast F
+accessible field net/minecraft/client/player/LocalPlayer xRotLast F
+accessible method net/minecraft/client/multiplayer/PlayerInfo createSkinLookup (Lcom/mojang/authlib/GameProfile;)Ljava/util/function/Supplier;
+accessible class net/minecraft/client/resources/SkinManager$TextureCache
+accessible field net/minecraft/client/KeyMapping clickCount I
+# 26.2: timeOfDay was replaced by WorldClock network states, not a writable long.
+# PrimedTnt.DEFAULT_FUSE_TIME and Camera.getFov() are already public.

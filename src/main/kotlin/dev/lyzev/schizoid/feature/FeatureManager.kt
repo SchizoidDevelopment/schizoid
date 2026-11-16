@@ -10,7 +10,7 @@ import dev.lyzev.api.glfw.GLFWKey
 import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.Schizoid.mc
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.text.Text
+import net.minecraft.network.chat.Component
 import org.reflections.Reflections
 import java.lang.reflect.Modifier
 import kotlin.jvm.internal.Reflection
@@ -60,7 +60,7 @@ object FeatureManager : EventListener {
      *
      * @param message The message to send.
      */
-    fun sendChatMessage(text: Text) = mc.player?.sendMessage(text)
+    fun sendChatMessage(text: Component) = mc.player?.sendSystemMessage(text)
 
     override val shouldHandleEvents = true
 
@@ -75,12 +75,12 @@ object FeatureManager : EventListener {
         features.sortBy { it.name }
 
         on<EventKeystroke> { event ->
-            if (mc.currentScreen == null && event.action == 1) features.filter { it.keybinds.contains(GLFWKey[event.key]) }
+            if (mc.gui.screen() == null && event.action == 1) features.filter { it.keybinds.contains(GLFWKey[event.key]) }
                 .forEach { it.keybindReleased() }
         }
 
         on<EventMouseClick> { event ->
-            if (mc.currentScreen == null && event.action == 1) features.filter { it.keybinds.contains(GLFWKey[event.button]) }
+            if (mc.gui.screen() == null && event.action == 1) features.filter { it.keybinds.contains(GLFWKey[event.button]) }
                 .forEach { it.keybindReleased() }
         }
 

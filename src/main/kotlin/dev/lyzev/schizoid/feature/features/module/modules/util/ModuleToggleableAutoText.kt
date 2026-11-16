@@ -13,7 +13,7 @@ import dev.lyzev.api.setting.settings.slider
 import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.network.packet.s2c.play.GameMessageS2CPacket
+import net.minecraft.network.protocol.game.ClientboundSystemChatPacket
 import kotlin.concurrent.thread
 
 object ModuleToggleableAutoText :
@@ -48,20 +48,24 @@ object ModuleToggleableAutoText :
     val delay by slider("Delay", "The delay before sending the message.", 200, 0, 5000, "ms")
 
     override val shouldHandleEvents
-        get() = isEnabled && triggers.isNotEmpty() && messages.isNotEmpty()
+        get() = isEnabled && mc.connection != null && triggers.isNotEmpty() && messages.isNotEmpty()
 
     init {
         on<EventPacket> { event ->
-            if (event.packet is GameMessageS2CPacket) {
-                val message = event.packet.content.string
-                if (message != null) {
-                    for (i in triggers.indices) {
-                        if (message.contains(triggers.elementAt(i))) {
-                            thread {
-                                Thread.sleep(delay.toLong())
-                                mc.networkHandler?.sendChatMessage(messages.random())
+            val packet = event.packet
+            if (event.type == EventPacket.Type.S2C && packet is ClientboundSystemChatPacket) {
+                val message = packet.content().string
+                if (triggers.any { message.contains(it) }) {
+                    val connection = mc.connection ?: return@on
+                    val reply = messages.random()
+                    val wait = delay.toLong()
+                    thread(name = "Schizoid AutoText", isDaemon = true) {
+                        Thread.sleep(wait)
+                        mc.execute {
+                            if (isEnabled && mc.connection === connection) {
+                                if (reply.startsWith('/')) connection.sendCommand(reply.substring(1))
+                                else connection.sendChat(reply)
                             }
-                            break
                         }
                     }
                 }

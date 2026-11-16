@@ -16,8 +16,8 @@ uniform float Luminosity;
 uniform float NoiseStrength;
 uniform float NoiseScale;
 
-#include "Luminance.glsl"
-#include "Noise.glsl"
+#include "luminance.glsl"
+#include "noise.glsl"
 
 void main() {
     color = texture(Tex0, uv);

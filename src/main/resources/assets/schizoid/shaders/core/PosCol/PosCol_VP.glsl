@@ -14,7 +14,7 @@ out vec3 FragPos;
 uniform mat4 ModelViewMat;
 uniform mat4 ProjMat;
 
-#include "Color.glsl"
+#include "color.glsl"
 
 void main()
 {

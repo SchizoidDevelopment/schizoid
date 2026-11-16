@@ -48,10 +48,10 @@ object ModuleToggleableMotionGraph :
     var axisFlags = AxisFlags.DEFAULT
 
     override fun renderImGuiContent() {
-        scale.set(mc.window.framebufferWidth * size / 100f, mc.window.framebufferHeight * size / 100f)
+        scale.set(mc.window.width * size / 100f, mc.window.height * size / 100f)
 
         if (beginPlot(
-                mc.player!!.name.literalString,
+                mc.player!!.name.string,
                 unit.per,
                 unit.key,
                 scale,
@@ -82,7 +82,7 @@ object ModuleToggleableMotionGraph :
 
     init {
         on<EventClientPlayerEntityTick> { event ->
-            unit.addY(y, event.player.velocity.horizontalLength())
+            unit.addY(y, event.player.deltaMovement.horizontalDistance())
             if (y.size > length) {
                 y.removeFirst()
             }

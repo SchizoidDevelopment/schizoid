@@ -18,11 +18,11 @@ jobs:
       CI: true
     steps:
       - uses: actions/checkout@v3
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '25'
           cache: gradle
       - name: Read version from gradle.properties
         id: get_version
@@ -37,14 +37,14 @@ jobs:
         id: commit_hash
         run: echo "commit_hash=$(git log --pretty=format:'%h' -n 1)" >> $GITHUB_OUTPUT
       - name: Build the project
-        run: ./gradlew build
+        run: ./gradlew assemble
       - name: Create Release Assets
         run: |
           echo "Running shell script with version: ${{ github.event.inputs.version }}"
           mkdir release
           
           for file in build/libs/*.jar; do
-            if [[ $file != *"-shadow.jar" ]]; then
+            if [[ $file != *"-plain.jar" ]]; then
               cp $file release
             fi
           done

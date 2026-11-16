@@ -6,7 +6,7 @@
 package dev.lyzev.api.glfw
 
 import dev.lyzev.schizoid.Schizoid
-import net.minecraft.client.util.InputUtil
+import com.mojang.blaze3d.platform.InputConstants
 
 /**
  * Enum class representing GLFW keys.
@@ -81,6 +81,6 @@ enum class GLFWKey(val code: Int) {
     companion object {
         operator fun get(keyCode: Int): GLFWKey = entries.firstOrNull { it.code == keyCode } ?: NONE
 
-        fun isPressed(code: Int) = InputUtil.isKeyPressed(Schizoid.mc.window.handle, code)
+        fun isPressed(code: Int) = InputConstants.isKeyDown(Schizoid.mc.window, code)
     }
 }

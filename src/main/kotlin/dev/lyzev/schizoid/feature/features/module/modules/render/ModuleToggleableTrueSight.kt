@@ -11,7 +11,7 @@ import dev.lyzev.api.setting.settings.switch
 import dev.lyzev.api.settings.Setting.Companion.neq
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.block.Blocks
+import net.minecraft.world.level.block.Blocks
 
 object ModuleToggleableTrueSight : ModuleToggleable(
     "True Sight",

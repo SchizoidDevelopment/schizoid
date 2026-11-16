@@ -5,8 +5,7 @@
 
 package dev.lyzev.api.opengl.shader.blur.blurs
 
-import com.mojang.blaze3d.platform.GlConst
-import com.mojang.blaze3d.systems.RenderSystem
+import dev.lyzev.api.opengl.Render
 import dev.lyzev.api.opengl.WrappedFramebuffer
 import dev.lyzev.api.opengl.clear
 import dev.lyzev.api.opengl.shader.Shader
@@ -15,6 +14,7 @@ import dev.lyzev.api.opengl.shader.ShaderDualKawaseDown
 import dev.lyzev.api.opengl.shader.ShaderDualKawaseUp
 import dev.lyzev.api.opengl.shader.blur.Blur
 import org.joml.Vector2f
+import org.lwjgl.opengl.GL33C.*
 
 /**
  * Object that represents a dual Kawase blur.
@@ -69,7 +69,7 @@ object BlurDualKawase : Blur {
     private val halfTexelSize = Vector2f()
 
     override fun switchStrength(strength: Int) {
-        this.strength = strengths[strength - 1]
+        this.strength = strengths[strength.coerceIn(1, strengths.size) - 1]
     }
 
     /**
@@ -85,8 +85,8 @@ object BlurDualKawase : Blur {
         targetFBO.clear()
         targetFBO.beginWrite(true)
         shader.bind()
-        RenderSystem.activeTexture(GlConst.GL_TEXTURE0)
-        RenderSystem.bindTexture(sourceTex)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, sourceTex)
         shader.setUniforms(
             strength.second, halfTexelSize.set(.5f / targetFBO.textureWidth, .5f / targetFBO.textureHeight), alpha
         )
@@ -94,7 +94,9 @@ object BlurDualKawase : Blur {
         shader.unbind()
     }
 
-    override fun render(sourceTex: Int, alpha: Boolean) {
+    override fun render(sourceTex: Int, alpha: Boolean) = Render.isolated {
+        Render.prepareFullscreen()
+        glDisable(GL_BLEND)
         // Initial downsample
         renderToFBO(fbos[1], sourceTex, ShaderDualKawaseDown, alpha)
         // Downsample

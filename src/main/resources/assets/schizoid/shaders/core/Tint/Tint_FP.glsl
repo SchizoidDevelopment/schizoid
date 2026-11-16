@@ -21,8 +21,8 @@ uniform float Time;
 uniform float Yaw;
 uniform float Pitch;
 
-#include "Color.glsl"
-#include "3DSimplexNoise.glsl"
+#include "color.glsl"
+#include "3dsimplexnoise.glsl"
 #include "${RGBPukeMode}.glsl"
 
 void main() {

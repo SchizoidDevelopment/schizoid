@@ -6,8 +6,8 @@
 package dev.lyzev.schizoid.injection.mixin.minecraft.client.world;
 
 import dev.lyzev.api.events.EventBlockParticle;
-import net.minecraft.block.Block;
-import net.minecraft.client.world.ClientWorld;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.client.multiplayer.ClientLevel;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * This class provides a mixin for the ClientWorld class in the Minecraft client world package.
  * It modifies the behavior of the getBlockParticle method of the ClientWorld class.
  */
-@Mixin(ClientWorld.class)
+@Mixin(ClientLevel.class)
 public class MixinClientWorld {
 
     /**
@@ -27,7 +27,7 @@ public class MixinClientWorld {
      *
      * @param cir The callback information, which includes the return value of the block particle retrieval.
      */
-    @Inject(method = "getBlockParticle", at = @At("RETURN"), cancellable = true)
+    @Inject(method = "getMarkerParticleTarget", at = @At("RETURN"), cancellable = true)
     private void onGetBlockParticle(CallbackInfoReturnable<Block> cir) {
         EventBlockParticle event = new EventBlockParticle(cir.getReturnValue());
         event.fire();

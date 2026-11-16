@@ -5,14 +5,11 @@
 
 package dev.lyzev.schizoid.feature.features.module.modules.combat
 
-import com.mojang.blaze3d.systems.RenderSystem
 import dev.lyzev.api.events.*
 import dev.lyzev.api.math.AI
 import dev.lyzev.api.math.canSee
 import dev.lyzev.api.math.get
-import dev.lyzev.api.opengl.Render
-import dev.lyzev.api.opengl.shader.ShaderPosCol
-import dev.lyzev.api.opengl.shader.ShaderReflection
+import dev.lyzev.api.opengl.WorldRenderBridge
 import dev.lyzev.api.setting.settings.*
 import dev.lyzev.api.settings.Setting.Companion.eq
 import dev.lyzev.api.settings.Setting.Companion.neq
@@ -20,19 +17,14 @@ import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
 import dev.lyzev.schizoid.feature.features.module.modules.player.FeatureRotation.current
-import net.minecraft.client.render.BufferRenderer
-import net.minecraft.client.render.Tessellator
-import net.minecraft.client.render.VertexFormat
-import net.minecraft.client.render.VertexFormats
-import net.minecraft.entity.Entity
-import net.minecraft.entity.LivingEntity
-import net.minecraft.registry.Registries
-import net.minecraft.util.hit.HitResult
-import net.minecraft.util.math.MathHelper
-import net.minecraft.util.math.Vec3d
-import net.minecraft.world.RaycastContext
+import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.LivingEntity
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.world.phys.HitResult
+import net.minecraft.util.Mth
+import net.minecraft.world.phys.Vec3
+import net.minecraft.world.level.ClipContext
 import org.joml.Matrix4f
-import org.lwjgl.opengl.GL13
 import java.awt.Color
 import kotlin.math.min
 
@@ -40,14 +32,19 @@ object ModuleToggleableAimBot : ModuleToggleable(
     "Aim Bot", "Collect data for Aim Bot.", category = IFeature.Category.COMBAT
 ), EventListener {
 
-    private var aimVec: Vec3d? = null
-    private var lastAimVec: Vec3d? = null
+    private var aimVec: Vec3? = null
+    private var lastAimVec: Vec3? = null
+    private var lastHitVec: Vec3? = null
+    private var target: Entity? = null
+    private data class AimDebug(val current: Vec3, val previous: Vec3?)
+    @Volatile
+    private var aimDebug: AimDebug? = null
     private var time = System.currentTimeMillis()
 
     val targets by multiOption(
         "Targets",
         "The targets to aim at.",
-        Registries.ENTITY_TYPE.map { it.name.string to (it.name.string == "Player") }.sortedBy { it.first }.toSet()
+        BuiltInRegistries.ENTITY_TYPE.map { it.description.string to (it.description.string == "Player") }.sortedBy { it.first }.toSet()
     )
     val aimExtensionReach by slider("Aim Extension Reach", "The reach of the aim extension.", 1.8f, 0f, 5f, 1, "blocks")
     val aimThroughWalls by switch("Aim Through Walls", "Aims through walls.", false)
@@ -99,7 +96,7 @@ object ModuleToggleableAimBot : ModuleToggleable(
         hide = ::aimInstant eq true
     )
     val aimVector by option("Aim Vector", "The aim vector.", AimVector.Intelligent, AimVector.entries)
-    val forceHit by switch("Force Hit", "Aims on the nearest vector if the artificial intelligence vector is not in reach.", true, hide = ::aimVector eq "Nearest")
+    val forceHit by switch("Force Hit", "Aims on the nearest vector if the artificial intelligence vector is not in reach.", true, hide = ::aimVector eq AimVector.Nearest)
     val aimSpeedForceHitWeight by slider(
         "Aim Force Hit Weight",
         "The weight of the force hit in the aim speed.",
@@ -125,292 +122,122 @@ object ModuleToggleableAimBot : ModuleToggleable(
 
     override fun onDisable() {
         aimVec = null
+        lastAimVec = null
+        lastHitVec = null
+        target = null
+        aimDebug = null
+        AimCubeRenderer.release()
     }
 
     override val shouldHandleEvents
-        get() = isEnabled && isIngame
+        get() = isEnabled && mc.player != null && mc.level != null
 
     init {
 
-        var lastHitVec: Vec3d? = null
-        var target: Entity? = null
-
         on<EventUpdateCrosshairTargetTick> {
-            val reach = mc.player!!.entityInteractionRange
+            val player = mc.player ?: return@on
+            val level = mc.level ?: return@on
+            val hitResult = mc.hitResult ?: return@on
+            val reach = player.attackReach()
             val maxReach = reach + aimExtensionReach
-            val possibleTarget = mc.world!!.entities.filter { entity ->
-                entity != mc.player && entity.isAlive && targets.any { it.second && it.first == entity.type.name.string } && entity.boundingBox[mc.player!!.eyePos].let { nearest ->
-                    mc.player!!.squaredDistanceTo(nearest) <= MathHelper.square(maxReach) && mc.player!!.eyePos[nearest].let { rotation ->
-                        val deltaPitch = (if (fovRotation == "Server") current.y else mc.player!!.pitch) - rotation.x
+            fun isInRange(entity: Entity): Boolean = entity.boundingBox[player.eyePosition].let { nearest ->
+                player.distanceToSqr(nearest) <= Mth.square(maxReach) && player.eyePosition[nearest].let { rotation ->
+                        val deltaPitch = (if (fovRotation == "Server") current.y else player.xRot) - rotation.x
                         val deltaYaw =
-                            MathHelper.wrapDegrees((if (fovRotation == "Server") current.x else mc.player!!.yaw) - rotation.y)
-                        MathHelper.square(deltaPitch) + MathHelper.square(deltaYaw)
-                    } > MathHelper.square(255 - fov)
-                }
+                            Mth.wrapDegrees((if (fovRotation == "Server") current.x else player.yRot) - rotation.y)
+                        Mth.square(deltaPitch) + Mth.square(deltaYaw)
+                    } > Mth.square(255 - fov)
+            }
+            val possibleTarget = level.entitiesForRendering().filter { entity ->
+                entity != player && entity.isAlive && targets.any { it.second && it.first == entity.type.description.string } && isInRange(entity)
             }.minByOrNull {
                 priority.getEntityValue(it)
             }
-            if (target == null || possibleTarget == null || System.currentTimeMillis() - time > switchDelay || !target!!.isAlive || target?.let { entity ->
-                    entity.boundingBox[mc.player!!.eyePos].let { nearest ->
-                        mc.player!!.squaredDistanceTo(nearest) <= MathHelper.square(maxReach) && mc.player!!.eyePos[nearest].let { rotation ->
-                            val deltaPitch =
-                                (if (fovRotation == "Server") current.y else mc.player!!.pitch) - rotation.x
-                            val deltaYaw =
-                                MathHelper.wrapDegrees(MathHelper.wrapDegrees((if (fovRotation == "Server") current.x else mc.player!!.yaw)) - rotation.y)
-                            MathHelper.square(deltaPitch) + MathHelper.square(deltaYaw)
-                        } > MathHelper.square(255 - fov)
-                    }
-                } == false) {
+            val previous = target
+            if (previous == null || possibleTarget == null || System.currentTimeMillis() - time > switchDelay ||
+                !previous.isAlive || previous.level() !== level || !isInRange(previous)) {
                 if (possibleTarget != null) {
                     time = System.currentTimeMillis()
                 }
                 target = possibleTarget
             }
-            if (target != null) {
+            val selected = target
+            if (selected != null) {
                 lastAimVec = aimVec
-                aimVec = aimVector.getAimVec(target!!, reach, lastHitVec)
-
-                val box = target!!.boundingBox
-                val crosshairAim = box[mc.crosshairTarget!!.pos]
-                lastHitVec = Vec3d(
-                    (crosshairAim.x - box.minX) / (box.maxX - box.minX),
-                    (crosshairAim.y - box.minY) / (box.maxY - box.minY),
-                    (crosshairAim.z - box.minZ) / (box.maxZ - box.minZ)
+                val box = selected.boundingBox
+                val candidate = aimVector.getAimVec(selected, reach, lastHitVec)
+                aimVec = if (candidate.isFinite) candidate else Vec3(
+                    (box.minX + box.maxX) * .5, (box.minY + box.maxY) * .5, (box.minZ + box.maxZ) * .5
+                )
+                val crosshairAim = box[hitResult.location]
+                lastHitVec = Vec3(
+                    (crosshairAim.x - box.minX) / (box.maxX - box.minX).coerceAtLeast(1e-6),
+                    (crosshairAim.y - box.minY) / (box.maxY - box.minY).coerceAtLeast(1e-6),
+                    (crosshairAim.z - box.minZ) / (box.maxZ - box.minZ).coerceAtLeast(1e-6)
                 )
             } else {
                 aimVec = null
+                lastAimVec = null
                 lastHitVec = null
             }
+            aimDebug = aimVec?.let { AimDebug(it, lastAimVec) }
         }
 
         on<EventRotationGoal> { event ->
-            if (aimVec == null || (!aimThroughWalls && !mc.player!!.canSee(aimVec!!))) return@on
-            if (mc.player!!.boundingBox.contains(aimVec) || target!!.boundingBox.contains(mc.player!!.eyePos)) {
-                aimVec = Vec3d(
-                    target!!.boundingBox.minX + (target!!.boundingBox.maxX - target!!.boundingBox.minX) * 0.5,
-                    aimVec!!.y,
-                    target!!.boundingBox.minZ + (target!!.boundingBox.maxZ - target!!.boundingBox.minZ) * 0.5
+            val player = mc.player ?: return@on
+            val selected = target ?: return@on
+            if (!selected.isAlive || selected.level() !== player.level()) return@on
+            var point = aimVec ?: return@on
+            if (!aimThroughWalls && !player.canSee(point)) return@on
+            if (player.boundingBox.contains(point) || selected.boundingBox.contains(player.eyePosition)) {
+                point = Vec3(
+                    selected.boundingBox.minX + (selected.boundingBox.maxX - selected.boundingBox.minX) * 0.5,
+                    point.y,
+                    selected.boundingBox.minZ + (selected.boundingBox.maxZ - selected.boundingBox.minZ) * 0.5
                 )
+                aimVec = point
             }
-            event.goal = aimVec
+            aimDebug = AimDebug(point, lastAimVec)
+            event.goal = point
             if (aimInstant) {
                 event.instant = true
                 return@on
             }
-            if (aimInstant) {
-                event.weight = 1f
-            } else {
-                event.weight = aimSpeed / 100f
+            event.weight = aimSpeed / 100f
 
-                // Distance
-                val aimSpeedDistanceWeight = aimSpeedDistanceWeight / 100f
-                val reach = mc.player!!.entityInteractionRange
-                val maxReach = reach + aimExtensionReach
-                val distance = mc.player!!.eyePos.distanceTo(target!!.boundingBox[mc.player!!.eyePos])
-                if (distance <= reach && (target !is LivingEntity || (target as LivingEntity).hurtTime <= 3)) {
-                    event.force = true
-                }
-                event.weight += (distance / maxReach).toFloat() * aimSpeedDistanceWeight
+            val reach = player.attackReach()
+            val maxReach = (reach + aimExtensionReach).coerceAtLeast(1e-6)
+            val distance = player.eyePosition.distanceTo(selected.boundingBox[player.eyePosition])
+            if (distance <= reach && (selected !is LivingEntity || selected.hurtTime <= 3)) event.force = true
+            event.weight += (distance / maxReach).toFloat() * aimSpeedDistanceWeight / 100f
 
-                // Crosshair
-                if (mc.targetedEntity == target) {
-                    val aimSpeedCrosshairWeight = aimSpeedCrosshairWeight / 100f
-                    event.weight -= Schizoid.random.nextFloat() * (aimSpeedCrosshairWeight * 0.2f) + aimSpeedCrosshairWeight * 0.8f
-                }
-
-                // Hurt time
-                val aimSpeedHurtTimeWeight = aimSpeedHurtTimeWeight / 100f
-                if (target is LivingEntity) {
-                    event.weight += (1 - (target as LivingEntity).hurtTime / (target as LivingEntity).maxHurtTime.toFloat()) * aimSpeedHurtTimeWeight
-                }
-
-                // Velocity
-                val aimSpeedVelocityWeight = aimSpeedVelocityWeight / 100f
-                val velocity = Vec3d(
-                    target!!.x - target!!.prevX, target!!.y - target!!.prevY, target!!.z - target!!.prevZ
-                ).lengthSquared() / 12.0
-                event.weight += velocity.toFloat() * aimSpeedVelocityWeight
-
-                // Random
-                val aimSpeedRandomWeight = aimSpeedRandomWeight / 100f
-                event.weight += aimSpeedRandomWeight - Schizoid.random.nextFloat() * aimSpeedRandomWeight / 2f
-
-                if (forceHit && (target !is LivingEntity || (target as LivingEntity).hurtTime <= 3) && mc.player!!.eyePos.squaredDistanceTo(aimVec) < reach * reach) {
-                    event.weight += aimSpeedForceHitWeight / 100f + Schizoid.random.nextFloat() * 0.1f
-                }
+            if (mc.crosshairPickEntity == selected) {
+                val weight = aimSpeedCrosshairWeight / 100f
+                event.weight -= Schizoid.random.nextFloat() * (weight * 0.2f) + weight * 0.8f
+            }
+            if (selected is LivingEntity) {
+                event.weight += (1 - selected.hurtTime / selected.hurtDuration.coerceAtLeast(1).toFloat()) * aimSpeedHurtTimeWeight / 100f
+            }
+            val velocity = Vec3(selected.x - selected.xOld, selected.y - selected.yOld, selected.z - selected.zOld).lengthSqr() / 12.0
+            event.weight += velocity.toFloat() * aimSpeedVelocityWeight / 100f
+            val randomWeight = aimSpeedRandomWeight / 100f
+            event.weight += randomWeight - Schizoid.random.nextFloat() * randomWeight / 2f
+            if (forceHit && (selected !is LivingEntity || selected.hurtTime <= 3) && player.eyePosition.distanceToSqr(point) < reach * reach) {
+                event.weight += aimSpeedForceHitWeight / 100f + Schizoid.random.nextFloat() * 0.1f
             }
         }
 
         on<EventRenderWorld>(Event.Priority.LOW) { event ->
-            if (aimVec == null || !visualizeAimVector) return@on
-            RenderSystem.enableDepthTest()
-            val cam = mc.gameRenderer.camera.pos
+            if (!visualizeAimVector) return@on
+            val debug = aimDebug ?: return@on
+            val frame = WorldRenderBridge.currentFrame ?: return@on
+            val cam = frame.cameraPosition
             val modelViewMat = Matrix4f(event.modelViewMat)
-            val x = if (lastAimVec == null) aimVec!!.x else MathHelper.lerp(
-                Render.tickDelta.toDouble(), lastAimVec!!.x, aimVec!!.x
-            )
-            val y = if (lastAimVec == null) aimVec!!.y else MathHelper.lerp(
-                Render.tickDelta.toDouble(), lastAimVec!!.y, aimVec!!.y
-            )
-            val z = if (lastAimVec == null) aimVec!!.z else MathHelper.lerp(
-                Render.tickDelta.toDouble(), lastAimVec!!.z, aimVec!!.z
-            )
+            val point = debug.previous?.lerp(debug.current, frame.tickDelta.toDouble()) ?: debug.current
             modelViewMat.translate(
-                (x - cam.x).toFloat(), (y - cam.y).toFloat(), (z - cam.z).toFloat()
+                (point.x - cam.x).toFloat(), (point.y - cam.y).toFloat(), (point.z - cam.z).toFloat()
             )
-
-            val size = 0.04f
-
-            val x1 = -size
-            val y1 = -size
-            val z1 = -size
-            val x2 = size
-            val y2 = size
-            val z2 = size
-
-            if (reflection) {
-                ShaderReflection.bind()
-                ShaderReflection["ModelViewMat", false] = modelViewMat
-                ShaderReflection["ProjMat", false] = event.projMat
-                GL13.glActiveTexture(GL13.GL_TEXTURE0)
-                mc.framebuffer.beginRead()
-                ShaderReflection["Tex0"] = 0
-                ShaderReflection["Freq"] = .05f
-                ShaderReflection["CamPos"] = cam.toVector3f()
-
-                // back
-                var bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION)
-                bufferBuilder.vertex(x1, y1, z1).normal(0f, 0f, -1f)
-                bufferBuilder.vertex(x1, y2, z1).normal(0f, 0f, -1f)
-                bufferBuilder.vertex(x2, y2, z1).normal(0f, 0f, -1f)
-                bufferBuilder.vertex(x2, y1, z1).normal(0f, 0f, -1f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // left
-                bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION)
-                bufferBuilder.vertex(x1, y2, z2).normal(-1f, 0f, 0f)
-                bufferBuilder.vertex(x1, y2, z1).normal(-1f, 0f, 0f)
-                bufferBuilder.vertex(x1, y1, z1).normal(-1f, 0f, 0f)
-                bufferBuilder.vertex(x1, y1, z2).normal(-1f, 0f, 0f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // front
-                bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION)
-                bufferBuilder.vertex(x2, y1, z2).normal(0f, 0f, 1f)
-                bufferBuilder.vertex(x2, y2, z2).normal(0f, 0f, 1f)
-                bufferBuilder.vertex(x1, y2, z2).normal(0f, 0f, 1f)
-                bufferBuilder.vertex(x1, y1, z2).normal(0f, 0f, 1f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // right
-                bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION)
-                bufferBuilder.vertex(x2, y2, z1).normal(1f, 0f, 0f)
-                bufferBuilder.vertex(x2, y2, z2).normal(1f, 0f, 0f)
-                bufferBuilder.vertex(x2, y1, z2).normal(1f, 0f, 0f)
-                bufferBuilder.vertex(x2, y1, z1).normal(1f, 0f, 0f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // top
-                bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION)
-                bufferBuilder.vertex(x2, y2, z2).normal(0f, 1f, 0f)
-                bufferBuilder.vertex(x2, y2, z1).normal(0f, 1f, 0f)
-                bufferBuilder.vertex(x1, y2, z1).normal(0f, 1f, 0f)
-                bufferBuilder.vertex(x1, y2, z2).normal(0f, 1f, 0f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // bottom
-                bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION)
-                bufferBuilder.vertex(x1, y1, z1).normal(0f, -1f, 0f)
-                bufferBuilder.vertex(x2, y1, z1).normal(0f, -1f, 0f)
-                bufferBuilder.vertex(x2, y1, z2).normal(0f, -1f, 0f)
-                bufferBuilder.vertex(x1, y1, z2).normal(0f, -1f, 0f)
-                BufferRenderer.draw(bufferBuilder.end())
-                ShaderReflection.unbind()
-            } else {
-                ShaderPosCol.bind()
-                ShaderPosCol["ModelViewMat", false] = modelViewMat
-                ShaderPosCol["ProjMat", false] = event.projMat
-
-                // back
-                var bufferBuilder =
-                    Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR)
-                bufferBuilder.vertex(x1, y1, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y2, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y2, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y1, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // left
-                bufferBuilder =
-                    Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR)
-                bufferBuilder.vertex(x1, y2, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y2, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y1, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y1, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // front
-                bufferBuilder =
-                    Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR)
-                bufferBuilder.vertex(x2, y1, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y2, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y2, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y1, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // right
-                bufferBuilder =
-                    Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR)
-                bufferBuilder.vertex(x2, y2, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y2, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y1, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y1, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // top
-                bufferBuilder =
-                    Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR)
-                bufferBuilder.vertex(x2, y2, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y2, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y2, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y2, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                BufferRenderer.draw(bufferBuilder.end())
-
-                // bottom
-                bufferBuilder =
-                    Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR)
-                bufferBuilder.vertex(x1, y1, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y1, z1)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x2, y1, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                bufferBuilder.vertex(x1, y1, z2)
-                    .color(color.red / 255f, color.green / 255f, color.blue / 255f, color.alpha / 255f)
-                BufferRenderer.draw(bufferBuilder.end())
-                ShaderPosCol.unbind()
-            }
-            RenderSystem.activeTexture(GL13.GL_TEXTURE0)
+            AimCubeRenderer.draw(modelViewMat, event.projMat, cam, color, reflection)
         }
     }
 
@@ -427,44 +254,45 @@ object ModuleToggleableAimBot : ModuleToggleable(
                 }
             }
 
-            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3d?): Vec3d {
-                val maxReach = reach + aimExtensionReach
+            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3?): Vec3 {
+                val maxReach = (reach + aimExtensionReach).coerceAtLeast(1e-6)
                 val box = target.boundingBox
                 var wasAiming = 0
                 val hitVec = lastHitVec ?: run {
                     wasAiming = 1
-                    val nearest = box[mc.player!!.eyePos]
-                    Vec3d(
-                        (nearest.x - box.minX) / (box.maxX - box.minX),
-                        (nearest.y - box.minY) / (box.maxY - box.minY),
-                        (nearest.z - box.minZ) / (box.maxZ - box.minZ)
+                    val nearest = box[mc.player!!.eyePosition]
+                    Vec3(
+                        (nearest.x - box.minX) / (box.maxX - box.minX).coerceAtLeast(1e-6),
+                        (nearest.y - box.minY) / (box.maxY - box.minY).coerceAtLeast(1e-6),
+                        (nearest.z - box.minZ) / (box.maxZ - box.minZ).coerceAtLeast(1e-6)
                     )
                 }
                 val lookVecEntity =
-                    Vec3d.fromPolar(mc.cameraEntity!!.eyePos[target.eyePos]).normalize().add(1.0, 1.0, 1.0)
+                    Vec3.directionFromRotation(mc.cameraEntity!!.eyePosition[target.eyePosition]).normalize().add(1.0, 1.0, 1.0)
                         .normalize()
-                val reachPercentage = mc.cameraEntity!!.eyePos.distanceTo(box[mc.cameraEntity!!.eyePos]) / maxReach
-                val velocityTarget = Vec3d(
-                    target.x - target.prevX, target.y - target.prevY, target.z - target.prevZ
+                val reachPercentage = mc.cameraEntity!!.eyePosition.distanceTo(box[mc.cameraEntity!!.eyePosition]) / maxReach
+                val velocityTarget = Vec3(
+                    target.x - target.xOld, target.y - target.yOld, target.z - target.zOld
                 ).normalize().add(1.0, 1.0, 1.0).normalize()
-                val velocityPlayer = Vec3d(mc.player!!.x - mc.player!!.prevX, mc.player!!.y - mc.player!!.prevY, mc.player!!.z - mc.player!!.prevZ).normalize().add(1.0, 1.0, 1.0).normalize()
-                val lookVec = Vec3d.fromPolar(current.y, current.x).normalize().add(1.0, 1.0, 1.0).normalize()
+                val velocityPlayer = Vec3(mc.player!!.x - mc.player!!.xOld, mc.player!!.y - mc.player!!.yOld, mc.player!!.z - mc.player!!.zOld).normalize().add(1.0, 1.0, 1.0).normalize()
+                val lookVec = Vec3.directionFromRotation(current.y, current.x).normalize().add(1.0, 1.0, 1.0).normalize()
 
-                val speedTarget = min(Vec3d(target.x - target.prevX, target.y - target.prevY, target.z - target.prevZ).lengthSquared() / 100.0, 1.0)
-                val speedPlayer = min(Vec3d(mc.player!!.x - mc.player!!.prevX, mc.player!!.y - mc.player!!.prevY, mc.player!!.z - mc.player!!.prevZ).lengthSquared() / 100.0, 1.0)
-                val clicks = min(mc.options.attackKey.timesPressed / 4.0, 1.0)
+                val speedTarget = min(Vec3(target.x - target.xOld, target.y - target.yOld, target.z - target.zOld).lengthSqr() / 100.0, 1.0)
+                val speedPlayer = min(Vec3(mc.player!!.x - mc.player!!.xOld, mc.player!!.y - mc.player!!.yOld, mc.player!!.z - mc.player!!.zOld).lengthSqr() / 100.0, 1.0)
+                val clicks = min(mc.options.keyAttack.clickCount / 4.0, 1.0)
                 val raycast = DoubleArray(8)
-                val from = mc.player!!.eyePos
+                val player = checkNotNull(mc.player)
+                val from = player.eyePosition
                 for (x in 0..1) {
                     for (y in 0..1) {
                         for (z in 0..1) {
-                            val to = Vec3d(
+                            val to = Vec3(
                                 box.minX + x * (box.maxX - box.minX) * 0.5 + 0.25 * (box.maxX - box.minX),
                                 box.minY + y * (box.maxY - box.minY) * 0.5 + 0.25 * (box.maxY - box.minY),
                                 box.minZ + z * (box.maxZ - box.minZ) * 0.5 + 0.25 * (box.maxZ - box.minZ)
                             )
-                            val hitResult = mc.world!!.raycast(RaycastContext(from, to, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, mc.player))
-                            if (hitResult == null || hitResult.type == HitResult.Type.MISS) {
+                            val hitResult = mc.level!!.clip(ClipContext(from, to, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player))
+                            if (hitResult.type == HitResult.Type.MISS) {
                                 raycast[x * 4 + y * 2 + z] = 1.0
                             } else {
                                 raycast[x * 4 + y * 2 + z] = 0.0
@@ -507,32 +335,32 @@ object ModuleToggleableAimBot : ModuleToggleable(
                 }
                 // Final output layer
                 val output = AI.applyLayer(hiddenLayerOutput, layers[3].first, layers[3].second, useSigmoid = true)
-                val aimVec = Vec3d(
+                val aimVec = Vec3(
                     output[0] * (box.maxX - box.minX) + box.minX,
                     output[1] * (box.maxY - box.minY) + box.minY,
                     output[2] * (box.maxZ - box.minZ) + box.minZ
                 )
                 return if (shouldForceHit(target, reach, aimVec)) {
-                    target.boundingBox[mc.player!!.eyePos]
+                    target.boundingBox[mc.player!!.eyePosition]
                 } else {
                     aimVec
                 }
             }
         },
         Nearest {
-            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3d?): Vec3d {
-                return target.boundingBox[mc.player!!.eyePos]
+            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3?): Vec3 {
+                return target.boundingBox[mc.player!!.eyePosition]
             }
         },
         Head {
-            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3d?): Vec3d {
-                return Vec3d(target.x, target.eyeY, target.z)
+            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3?): Vec3 {
+                return Vec3(target.x, target.eyeY, target.z)
             }
         },
         Center {
-            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3d?): Vec3d {
+            override fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3?): Vec3 {
                 val box = target.boundingBox
-                return Vec3d(
+                return Vec3(
                     box.minX + (box.maxX - box.minX) * 0.5,
                     box.minY + (box.maxY - box.minY) * 0.5,
                     box.minZ + (box.maxZ - box.minZ) * 0.5
@@ -540,12 +368,12 @@ object ModuleToggleableAimBot : ModuleToggleable(
             }
         };
 
-        abstract fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3d?): Vec3d
+        abstract fun getAimVec(target: Entity, reach: Double, lastHitVec: Vec3?): Vec3
 
-        protected fun shouldForceHit(target: Entity, reach: Double, aimVec: Vec3d): Boolean {
+        protected fun shouldForceHit(target: Entity, reach: Double, aimVec: Vec3): Boolean {
             if (forceHit && (target !is LivingEntity || target.hurtTime <= 3)) {
-                val nearest = target.boundingBox[mc.player!!.eyePos]
-                if (mc.player!!.eyePos.squaredDistanceTo(aimVec) > reach * reach && mc.player!!.eyePos.squaredDistanceTo(nearest) <= reach * reach) {
+                val nearest = target.boundingBox[mc.player!!.eyePosition]
+                if (mc.player!!.eyePosition.distanceToSqr(aimVec) > reach * reach && mc.player!!.eyePosition.distanceToSqr(nearest) <= reach * reach) {
                     return true
                 }
             }
@@ -558,22 +386,22 @@ object ModuleToggleableAimBot : ModuleToggleable(
     enum class Priority : OptionEnum {
         FOV {
             override fun getEntityValue(entity: Entity): Float {
-                val rotation = mc.player!!.eyePos[entity.boundingBox[mc.player!!.eyePos]]
+                val rotation = mc.player!!.eyePosition[entity.boundingBox[mc.player!!.eyePosition]]
                 val deltaPitch =
-                    MathHelper.wrapDegrees(rotation.x - if (fovRotation == "Server") current.y else mc.player!!.pitch)
+                    Mth.wrapDegrees(rotation.x - if (fovRotation == "Server") current.y else mc.player!!.xRot)
                 val deltaYaw =
-                    MathHelper.wrapDegrees(rotation.y - if (fovRotation == "Server") current.x else mc.player!!.yaw)
-                return -(MathHelper.square(deltaPitch) + MathHelper.square(deltaYaw))
+                    Mth.wrapDegrees(rotation.y - if (fovRotation == "Server") current.x else mc.player!!.yRot)
+                return -(Mth.square(deltaPitch) + Mth.square(deltaYaw))
             }
         },
         Distance {
-            override fun getEntityValue(entity: Entity) = entity.squaredDistanceTo(mc.player).toFloat()
+            override fun getEntityValue(entity: Entity) = entity.distanceToSqr(checkNotNull(mc.player)).toFloat()
         },
         Health {
-            override fun getEntityValue(entity: Entity) = (entity as LivingEntity).health
+            override fun getEntityValue(entity: Entity) = (entity as? LivingEntity)?.health ?: Float.MAX_VALUE
         },
         HurtTime {
-            override fun getEntityValue(entity: Entity) = (entity as LivingEntity).hurtTime.toFloat()
+            override fun getEntityValue(entity: Entity) = (entity as? LivingEntity)?.hurtTime?.toFloat() ?: Float.MAX_VALUE
         },
         Random {
             override fun getEntityValue(entity: Entity) = Schizoid.random.nextFloat()

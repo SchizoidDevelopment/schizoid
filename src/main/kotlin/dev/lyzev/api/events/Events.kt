@@ -8,21 +8,21 @@ package dev.lyzev.api.events
 import dev.lyzev.api.setting.settings.OptionEnum
 import dev.lyzev.api.theme.OSTheme
 import dev.lyzev.schizoid.Schizoid
-import net.minecraft.block.Block
-import net.minecraft.client.input.KeyboardInput
-import net.minecraft.client.network.ClientPlayerEntity
-import net.minecraft.client.option.KeyBinding
-import net.minecraft.client.render.RenderTickCounter
-import net.minecraft.client.render.VertexConsumer
-import net.minecraft.client.render.entity.model.EntityModel
-import net.minecraft.client.util.math.MatrixStack
-import net.minecraft.entity.Entity
-import net.minecraft.entity.LivingEntity
-import net.minecraft.entity.attribute.EntityAttribute
-import net.minecraft.entity.effect.StatusEffect
-import net.minecraft.entity.player.PlayerEntity
-import net.minecraft.network.packet.Packet
-import net.minecraft.util.math.Vec3d
+import net.minecraft.world.level.block.Block
+import net.minecraft.client.player.KeyboardInput
+import net.minecraft.client.player.LocalPlayer
+import net.minecraft.client.KeyMapping
+import net.minecraft.client.DeltaTracker
+import com.mojang.blaze3d.vertex.VertexConsumer
+import net.minecraft.client.model.EntityModel
+import com.mojang.blaze3d.vertex.PoseStack
+import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.ai.attributes.Attribute
+import net.minecraft.world.effect.MobEffect
+import net.minecraft.world.entity.player.Player
+import net.minecraft.network.protocol.Packet
+import net.minecraft.world.phys.Vec3
 import org.joml.Matrix4f
 
 /**
@@ -59,7 +59,7 @@ object EventRenderImGuiContent : Event
 /**
  * This event is triggered when a packet is sent.
  */
-class EventPacket(val packet: Packet<*>, val type: Type) : CancellableEvent() {
+class EventPacket(var packet: Packet<*>, val type: Type) : CancellableEvent() {
 
     companion object {
         var allowTrigger = true
@@ -98,12 +98,17 @@ object EventWindowResize : Event
 /**
  * This event is triggered when the player ticks.
  */
-class EventClientPlayerEntityTick(val player: ClientPlayerEntity) : Event
+class EventClientPlayerEntityTick(val player: LocalPlayer) : Event
 
 /**
  * This event is triggered when the world is rendered.
  */
-class EventRenderWorld(val tickCounter: RenderTickCounter, val modelViewMat: Matrix4f, val projMat: Matrix4f) : Event
+class EventRenderWorld @JvmOverloads constructor(
+    val tickCounter: DeltaTracker,
+    val modelViewMat: Matrix4f,
+    val projMat: Matrix4f,
+    val cameraPos: Vec3 = Schizoid.mc.gameRenderer.mainCamera().position()
+) : Event
 
 /**
  * This event is triggered when [net.minecraft.client.render.LightmapTextureManager] updates.
@@ -125,7 +130,7 @@ class EventIsInvisibleTo(var isInvisible: Boolean) : Event
  */
 class EventRenderModel(
     val instance: EntityModel<*>,
-    val matrixStack: MatrixStack,
+    val matrixStack: PoseStack,
     val vertexConsumer: VertexConsumer,
     var light: Int,
     var overlay: Int,
@@ -140,7 +145,7 @@ class EventBlockParticle(var block: Block?) : Event
 /**
  * This event is triggered when [LivingEntity.hasStatusEffect] is called.
  */
-class EventHasStatusEffect(val entity: LivingEntity, val effect: StatusEffect, var hasStatusEffect: Boolean) : Event
+class EventHasStatusEffect(val entity: LivingEntity, val effect: MobEffect, var hasStatusEffect: Boolean) : Event
 
 /**
  * This event is triggered when [net.minecraft.client.MinecraftClient.doItemUse] is called.
@@ -150,17 +155,18 @@ class EventItemUse(var itemUseCooldown: Int) : Event
 /**
  * This event is triggered when [net.minecraft.client.input.KeyboardInput.tick] or [ClientPlayerEntity.tickMovement] calls [KeyBinding.isPressed].
  */
-class EventIsMovementKeyPressed(val keyBinding: KeyBinding) : Event {
-    var isPressed = keyBinding.isPressed
-}
+class EventIsMovementKeyPressed @JvmOverloads constructor(
+    val keyBinding: KeyMapping,
+    var isPressed: Boolean = keyBinding.isDown
+) : Event
 
 class EventIsCursorLocked(var isCursorLocked: Boolean) : Event
 
 object EventUpdateMouse : Event
 
-class EventAttackEntityPre(val player: PlayerEntity, val entity: Entity) : Event
+class EventAttackEntityPre(val player: Player, val entity: Entity) : Event
 
-class EventAttackEntityPost(val player: PlayerEntity, val entity: Entity) : Event
+class EventAttackEntityPost(val player: Player, val entity: Entity) : Event
 
 class EventOSThemeUpdate(val theme: OSTheme.Theme) : Event
 
@@ -184,7 +190,7 @@ class EventUpdateVelocity(var yaw: Float) : Event
 
 class EventRotationGoal : Event {
 
-    var goal: Vec3d? = null
+    var goal: Vec3? = null
     var force = false
     var instant = false
     var weight = 1f
@@ -198,7 +204,7 @@ class EventLerpPosAndRotation(
     val step: Int, val x: Double, val y: Double, val z: Double, val yaw: Double, val pitch: Double
 ) : Event
 
-class EventGetAttributeValue(val attribute: EntityAttribute, var value: Double) : Event
+class EventGetAttributeValue(val attribute: Attribute, var value: Double) : Event
 
 class EventDistanceToBlockHitResult(var distance: Double) : Event
 

@@ -9,7 +9,7 @@ in vec4 Col;
 in vec3 FragPos;
 out vec4 Color;
 
-#include "Color.glsl"
+#include "color.glsl"
 
 void main() {
     Color = vec4(hsv2rgb(Col.rgb), Col.a);

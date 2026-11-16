@@ -13,10 +13,10 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 
 import java.net.Proxy;
 
-@Mixin(YggdrasilMinecraftSessionService.class)
+@Mixin(value = YggdrasilMinecraftSessionService.class, remap = false)
 public interface YggdrasilMinecraftSessionServiceAccessor {
 
-    @Invoker("<init>")
+    @Invoker(value = "<init>", remap = false)
     static YggdrasilMinecraftSessionService createYggdrasilMinecraftSessionService(final ServicesKeySet servicesKeySet, final Proxy proxy, final Environment env) {
         throw new UnsupportedOperationException();
     }

@@ -17,15 +17,15 @@ object ModuleRunnableGameMode :
 
     override fun invoke(): String? {
         if (!isIngame) return "You are not in a game."
-        mc.interactionManager?.setGameMode(mode.type)
+        mc.gameMode?.setLocalMode(mode.type)
         return null
     }
 
-    enum class GameMode(val type: net.minecraft.world.GameMode) : OptionEnum {
-        SURVIVAL(net.minecraft.world.GameMode.SURVIVAL),
-        CREATIVE(net.minecraft.world.GameMode.CREATIVE),
-        ADVENTURE(net.minecraft.world.GameMode.ADVENTURE),
-        SPECTATOR(net.minecraft.world.GameMode.SPECTATOR);
+    enum class GameMode(val type: net.minecraft.world.level.GameType) : OptionEnum {
+        SURVIVAL(net.minecraft.world.level.GameType.SURVIVAL),
+        CREATIVE(net.minecraft.world.level.GameType.CREATIVE),
+        ADVENTURE(net.minecraft.world.level.GameType.ADVENTURE),
+        SPECTATOR(net.minecraft.world.level.GameType.SPECTATOR);
 
         override val key: String
             get() = type.getName()

@@ -6,9 +6,11 @@
 package dev.lyzev.schizoid.injection.mixin.imgui;
 
 import dev.lyzev.api.imgui.render.ImGuiRenderer;
+import dev.lyzev.api.imgui.spatial.SpatialInputRouter;
 import imgui.ImGui;
 import imgui.ImGuiIO;
 import imgui.glfw.ImGuiImplGlfw;
+import org.lwjgl.glfw.GLFWMouseButtonCallback;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -22,6 +24,26 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(value = ImGuiImplGlfw.class, remap = false)
 public class MixinImGuiImplGlfw {
+    @Inject(method = "scrollCallback", at = @At("HEAD"), cancellable = true, remap = false)
+    private void worldScroll(long window, double x, double y, CallbackInfo ci) {
+        if (SpatialInputRouter.INSTANCE.onScroll(window, x, y)) ci.cancel();
+    }
+
+    @Inject(method = "keyCallback", at = @At("HEAD"), cancellable = true, remap = false)
+    private void worldKey(long window, int key, int scancode, int action, int mods, CallbackInfo ci) {
+        if (SpatialInputRouter.INSTANCE.onKey(window, key, action, mods)) ci.cancel();
+    }
+
+    @Inject(method = "charCallback", at = @At("HEAD"), cancellable = true, remap = false)
+    private void worldCharacter(long window, int codepoint, CallbackInfo ci) {
+        if (SpatialInputRouter.INSTANCE.onCharacter(window, codepoint)) ci.cancel();
+    }
+
+    @Inject(method = "windowFocusCallback", at = @At("HEAD"), remap = false)
+    private void worldFocus(long window, boolean focused, CallbackInfo ci) {
+        if (!focused && window == windowPtr && SpatialInputRouter.INSTANCE.getInteracting())
+            SpatialInputRouter.INSTANCE.reset(false);
+    }
 
     @Shadow
     @Final
@@ -30,6 +52,12 @@ public class MixinImGuiImplGlfw {
     @Shadow
     @Final
     private boolean[] mouseJustPressed;
+
+    @Shadow
+    private long windowPtr;
+
+    @Shadow
+    private GLFWMouseButtonCallback prevUserCallbackMouseButton;
 
     /**
      * This method is a mixin for the scrollCallback method of the ImGuiImplGlfw class.
@@ -42,7 +70,7 @@ public class MixinImGuiImplGlfw {
      * @param yOffset  The offset in the y direction.
      * @param ci       The callback information.
      */
-    @Inject(method = "scrollCallback", at = @At(value = "INVOKE", target = "Lorg/lwjgl/glfw/GLFWScrollCallback;invoke(JDD)V", shift = At.Shift.AFTER, ordinal = 0), cancellable = true, remap = false)
+    @Inject(method = "scrollCallback", at = @At(value = "INVOKE", target = "Limgui/ImGui;getIO()Limgui/ImGuiIO;"), cancellable = true, remap = false)
     private void onScrollCallback(long windowId, double xOffset, double yOffset, CallbackInfo ci) {
         // Update target scroll position
         ImGuiRenderer.INSTANCE.setTargetScrollX((float) (ImGuiRenderer.INSTANCE.getTargetScrollX() + xOffset));
@@ -61,14 +89,14 @@ public class MixinImGuiImplGlfw {
      * @param mods     The mods.
      * @param ci       The callback information.
      */
-    @Inject(method = "keyCallback", at = @At(value = "INVOKE", target = "Lorg/lwjgl/glfw/GLFWKeyCallback;invoke(JIIII)V", shift = At.Shift.AFTER, ordinal = 0), cancellable = true, remap = false)
+    @Inject(method = "keyCallback", at = @At(value = "INVOKE", target = "Limgui/ImGui;getIO()Limgui/ImGuiIO;"), cancellable = true, remap = false)
     private void onKeyCallback(long windowId, int key, int scancode, int action, int mods, CallbackInfo ci) {
         if (!ImGui.getIO().getWantCaptureKeyboard()) {
             final ImGuiIO io = ImGui.getIO();
 
-            if (key >= 0 && key < keyOwnerWindows.length) {
-                io.setKeysDown(key, false);
-                keyOwnerWindows[key] = 0;
+            for (int ownedKey = 0; ownedKey < keyOwnerWindows.length; ownedKey++) {
+                io.setKeysDown(ownedKey, false);
+                keyOwnerWindows[ownedKey] = 0;
             }
 
             io.setKeyCtrl(false);
@@ -89,12 +117,24 @@ public class MixinImGuiImplGlfw {
      * @param mods     The mods.
      * @param ci       The callback information.
      */
-    @Inject(method = "mouseButtonCallback", at = @At(value = "INVOKE", target = "Lorg/lwjgl/glfw/GLFWMouseButtonCallback;invoke(JIII)V", shift = At.Shift.AFTER, ordinal = 0), cancellable = true, remap = false)
+    @Inject(method = "mouseButtonCallback", at = @At("HEAD"), cancellable = true, remap = false)
     private void onMouseButtonCallback(long windowId, int button, int action, int mods, CallbackInfo ci) {
+        if (SpatialInputRouter.INSTANCE.onButton(windowId, button, action, mods)) {
+            ci.cancel();
+            return;
+        }
         if (!ImGui.getIO().getWantCaptureMouse()) {
+            // Keep Minecraft's callback chain intact even when the backend has no previous callback.
+            if (windowId == windowPtr && prevUserCallbackMouseButton != null)
+                prevUserCallbackMouseButton.invoke(windowId, button, action, mods);
             if (button >= 0 && button < mouseJustPressed.length)
                 mouseJustPressed[button] = false;
             ci.cancel();
         }
+    }
+
+    @Inject(method = "charCallback", at = @At(value = "INVOKE", target = "Limgui/ImGui;getIO()Limgui/ImGuiIO;"), cancellable = true, remap = false)
+    private void onCharCallback(long windowId, int codepoint, CallbackInfo ci) {
+        if (!ImGui.getIO().getWantCaptureKeyboard()) ci.cancel();
     }
 }

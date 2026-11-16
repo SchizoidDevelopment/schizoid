@@ -70,7 +70,7 @@ object ModuleToggleableWaterMark :
         LEAGUE_SPARTAN_EXTRA_BOLD.end()
         if (showFPS) {
             OPEN_SANS_BOLD.begin()
-            var fps = mc.currentFps
+            var fps = mc.fps
             if (fpsBoost) {
                 fps += boost
             }

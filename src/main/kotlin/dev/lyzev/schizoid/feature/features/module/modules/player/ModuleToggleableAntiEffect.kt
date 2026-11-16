@@ -11,7 +11,7 @@ import dev.lyzev.api.events.on
 import dev.lyzev.api.setting.settings.multiOption
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.registry.Registries
+import net.minecraft.core.registries.BuiltInRegistries
 
 object ModuleToggleableAntiEffect :
     ModuleToggleable("Anti Effect", "Makes everything brighter.", category = IFeature.Category.PLAYER), EventListener {
@@ -19,17 +19,17 @@ object ModuleToggleableAntiEffect :
     val effects = multiOption(
         "Effects",
         "Effects to disable.",
-        Registries.STATUS_EFFECT.map { it.name.string to !it.isBeneficial }.sortedBy { it.first }.toSet()
+        BuiltInRegistries.MOB_EFFECT.map { it.displayName.string to !it.isBeneficial }.sortedBy { it.first }.toSet()
     ) { options ->
         for (option in options) {
             if (option.second)
-                remove.add(Registries.STATUS_EFFECT.first { it.name.string == option.first })
+                remove.add(BuiltInRegistries.MOB_EFFECT.first { it.displayName.string == option.first })
             else
-                remove.remove(Registries.STATUS_EFFECT.first { it.name.string == option.first })
+                remove.remove(BuiltInRegistries.MOB_EFFECT.first { it.displayName.string == option.first })
         }
     }
 
-    private val remove = Registries.STATUS_EFFECT.filter { !it.isBeneficial }.toMutableSet()
+    private val remove = BuiltInRegistries.MOB_EFFECT.filter { !it.isBeneficial }.toMutableSet()
 
     override val shouldHandleEvents: Boolean
         get() = isEnabled && isIngame

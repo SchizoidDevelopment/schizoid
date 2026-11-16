@@ -56,65 +56,14 @@ class ImGuiRenderableSearch : ImGuiRenderable {
             setNextWindowFocus()
         var isFocused = true
         setNextWindowPos(getMainViewport().centerX, getMainViewport().centerY, ImGuiCond.Always, .5f, .5f)
-        setNextWindowSize(Schizoid.mc.window.framebufferWidth * .3f, 0f)
+        setNextWindowSize(getIO().displaySizeX * .3f, 0f)
         if (begin(
                 "\"SEARCH\"",
                 isSearching, ImGuiWindowFlags.AlwaysAutoResize or ImGuiWindowFlags.NoCollapse or ImGuiWindowFlags.NoMove
             )
         ) {
             isFocused = isWindowFocused(ImGuiFocusedFlags.RootAndChildWindows)
-            OPEN_SANS_REGULAR.begin()
-            if (beginCombo(
-                    "##prevSearchResult",
-                    prevResult.firstOrNull() ?: "Previous Searches",
-                    ImGuiComboFlags.HeightSmall or ImGuiComboFlags.NoPreview
-                )
-            ) {
-                for (i in prevResult.indices) {
-                    val isSelected = prevResult[i] == result?.name
-                    if (selectable(prevResult[i], isSelected)) {
-                        result = FeatureManager[prevResult[i]]
-                        prevResult.removeAt(i)
-                        prevResult.add(0, result!!.name)
-                    }
-                    if (isSelected) setItemDefaultFocus()
-                }
-                endCombo()
-            }
-            sameLine()
-            setNextItemWidth(getColumnWidth())
-            if (shouldFocus)
-                setKeyboardFocusHere()
-            shouldFocus = false
-            inputTextWithHint("##search", "Search...", input)
-            if (GLFWKey.ENTER.isPressed()) {
-                result = FeatureManager.get(*IFeature.Category.values()).maxByOrNull {
-                    FuzzySearch.weightedRatio(
-                        if (input.get().startsWith("@")) input.get().uppercase().substring(1) else input.get(),
-                        if (input.get().startsWith("@")) it.category.name else it.name
-                    )
-                }
-                if (result != null) {
-                    prevResult.remove(result!!.name)
-                    prevResult.add(0, result!!.name)
-                }
-            }
-            if (beginListBox("##searchResults", getColumnWidth(), Schizoid.mc.window.framebufferHeight * .15f)) {
-                FeatureManager.get(*IFeature.Category.values()).sortedByDescending {
-                    FuzzySearch.weightedRatio(
-                        if (input.get().startsWith("@")) input.get().uppercase().substring(1) else input.get(),
-                        if (input.get().startsWith("@")) it.category.name else it.name
-                    )
-                }.forEach { feature ->
-                    if (selectable("[${feature.category}] ${feature.name}", false)) {
-                        result = feature
-                        prevResult.remove(feature.name)
-                        prevResult.add(0, feature.name)
-                    }
-                }
-                endListBox()
-            }
-            OPEN_SANS_REGULAR.end()
+            renderContents()
         }
         end()
         if (!isFocused)
@@ -126,4 +75,61 @@ class ImGuiRenderableSearch : ImGuiRenderable {
     companion object {
         private const val MAX_TIME_BETWEEN_SHIFT_PRESSES = 300L
     }
+
+    /** Original controls reused by desktop and world-space canvases. */
+    fun renderContents() {
+        OPEN_SANS_REGULAR.begin()
+        if (beginCombo(
+                "##prevSearchResult",
+                prevResult.firstOrNull() ?: "Previous Searches",
+                ImGuiComboFlags.HeightSmall or ImGuiComboFlags.NoPreview
+            )
+        ) {
+            for (i in prevResult.indices) {
+                val isSelected = prevResult[i] == result?.name
+                if (selectable(prevResult[i], isSelected)) {
+                    result = FeatureManager[prevResult[i]]
+                    prevResult.removeAt(i)
+                    prevResult.add(0, result!!.name)
+                }
+                if (isSelected) setItemDefaultFocus()
+            }
+            endCombo()
+        }
+        sameLine()
+        setNextItemWidth(getColumnWidth())
+        if (shouldFocus)
+            setKeyboardFocusHere()
+        shouldFocus = false
+        inputTextWithHint("##search", "Search...", input)
+        if (GLFWKey.ENTER.isPressed()) {
+            result = FeatureManager.get(*IFeature.Category.values()).maxByOrNull {
+                FuzzySearch.weightedRatio(
+                    if (input.get().startsWith("@")) input.get().uppercase().substring(1) else input.get(),
+                    if (input.get().startsWith("@")) it.category.name else it.name
+                )
+            }
+            if (result != null) {
+                prevResult.remove(result!!.name)
+                prevResult.add(0, result!!.name)
+            }
+        }
+        if (beginListBox("##searchResults", getColumnWidth(), getIO().displaySizeY * .15f)) {
+            FeatureManager.get(*IFeature.Category.values()).sortedByDescending {
+                FuzzySearch.weightedRatio(
+                    if (input.get().startsWith("@")) input.get().uppercase().substring(1) else input.get(),
+                    if (input.get().startsWith("@")) it.category.name else it.name
+                )
+            }.forEach { feature ->
+                if (selectable("[${feature.category}] ${feature.name}", false)) {
+                    result = feature
+                    prevResult.remove(feature.name)
+                    prevResult.add(0, feature.name)
+                }
+            }
+            endListBox()
+        }
+        OPEN_SANS_REGULAR.end()
+    }
+
 }

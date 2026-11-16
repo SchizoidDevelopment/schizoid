@@ -5,7 +5,6 @@
 
 package dev.lyzev.schizoid.feature.features.gui.guis
 
-import com.mojang.blaze3d.systems.RenderSystem
 import dev.lyzev.api.animation.EasingFunction
 import dev.lyzev.api.animation.TimeAnimator
 import dev.lyzev.api.events.EventKeybindsRequest
@@ -13,16 +12,21 @@ import dev.lyzev.api.events.EventKeybindsResponse
 import dev.lyzev.api.events.EventListener
 import dev.lyzev.api.events.on
 import dev.lyzev.api.glfw.GLFWKey
+import dev.lyzev.api.imgui.spatial.SpatialWorldController
 import dev.lyzev.api.imgui.render.renderable.ImGuiRenderableConfigManager
 import dev.lyzev.api.imgui.render.renderable.ImGuiRenderableDeveloperTool
 import dev.lyzev.api.imgui.render.renderable.ImGuiRenderableSearch
+import dev.lyzev.api.opengl.glId
+import dev.lyzev.api.opengl.Render
 import dev.lyzev.api.setting.settings.option
 import dev.lyzev.api.setting.settings.slider
 import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.gui.ImGuiScreen
-import net.minecraft.client.gui.DrawContext
-import net.minecraft.util.Identifier
+import imgui.ImGui.*
+import net.minecraft.client.input.KeyEvent
+import net.minecraft.client.input.MouseButtonEvent
+import net.minecraft.resources.Identifier
 import org.lwjgl.glfw.GLFW
 
 object ImGuiScreenFeature : ImGuiScreen(
@@ -30,7 +34,7 @@ object ImGuiScreenFeature : ImGuiScreen(
 ), EventListener {
 
     private val texturesMario = Array(3) {
-        Identifier.of(Schizoid.MOD_ID, "textures/mario_$it.png")
+        Identifier.fromNamespaceAndPath(Schizoid.MOD_ID, "textures/mario_$it.png")
     }
     private var isMarioRunning = false
     private val timeAnimatorMario = TimeAnimator(8000)
@@ -52,42 +56,48 @@ object ImGuiScreenFeature : ImGuiScreen(
     val devTools = ImGuiRenderableDeveloperTool()
     val configManager = ImGuiRenderableConfigManager()
 
-    override fun render(context: DrawContext, mouseX: Int, mouseY: Int, delta: Float) {
-        super.render(context, mouseX, mouseY, delta)
-
+    override fun tick() {
+        super.tick()
         if (isWaitingForInput && System.currentTimeMillis() - waitingForInput > TIMEOUT) {
             EventKeybindsResponse(GLFW.GLFW_KEY_UNKNOWN).fire()
             isWaitingForInput = false
         }
+    }
 
+    private fun renderMario() {
         if (!isMarioRunning && timeAnimatorMario.isCompleted()) {
             timeAnimatorMario.setProgress(.0)
             return
         }
         isMarioRunning = true
 
-        val x = -32 + ((mc.window.scaledWidth + 32) * animationMario.ease(timeAnimatorMario.getProgress())).toInt()
-        RenderSystem.setShaderColor(1f, 1f, 1f, 1f)
-        context.drawTexture(
-            texturesMario[(System.currentTimeMillis() / 100.0 % texturesMario.size).toInt()],
-            x,
-            mc.window.scaledHeight - 32,
-            32,
-            32,
-            0f,
-            0f,
-            400,
-            400,
-            400,
-            400
+        val guiWidth = mc.window.guiScaledWidth
+        val guiHeight = mc.window.guiScaledHeight
+        val x = -32 + ((guiWidth + 32) * animationMario.ease(timeAnimatorMario.getProgress())).toInt()
+        val scaleX = getIO().displaySizeX / guiWidth.coerceAtLeast(1)
+        val scaleY = getIO().displaySizeY / guiHeight.coerceAtLeast(1)
+        val textureId = Render.isolated {
+            mc.textureManager.getTexture(texturesMario[(System.currentTimeMillis() / 100L % texturesMario.size).toInt()]).glId
+        }
+        // This used to be a DrawContext call. Drawing it with ImGui keeps it above the deferred shader background.
+        getBackgroundDrawList().addImage(
+            textureId, x * scaleX, (guiHeight - 32) * scaleY, (x + 32) * scaleX, guiHeight * scaleY,
+            0f, 0f, 1f, 1f
         )
-        isMarioRunning = x < mc.window.scaledWidth
+        isMarioRunning = x < guiWidth
     }
 
-    override fun keyPressed(keyCode: Int, scanCode: Int, modifiers: Int): Boolean {
-        if (isWaitingForInput) {
-            isWaitingForInput = false
-            EventKeybindsResponse(keyCode).fire()
+    /** Share the existing pending capture with world-canvas input, without triggering screen shortcuts. */
+    fun consumeKeybindInput(keyCode: Int): Boolean {
+        if (!isWaitingForInput) return false
+        isWaitingForInput = false
+        EventKeybindsResponse(keyCode).fire()
+        return true
+    }
+
+    override fun keyPressed(event: KeyEvent): Boolean {
+        val keyCode = event.key()
+        if (consumeKeybindInput(keyCode)) {
             return true
         } else if (keybinds.contains(GLFWKey[keyCode])) {
             keybindReleased()
@@ -96,10 +106,11 @@ object ImGuiScreenFeature : ImGuiScreen(
             search.open()
             return true
         }
-        return super.keyPressed(keyCode, scanCode, modifiers)
+        return super.keyPressed(event)
     }
 
-    override fun mouseClicked(mouseX: Double, mouseY: Double, button: Int): Boolean {
+    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
+        val button = event.button()
         if (isWaitingForInput) {
             isWaitingForInput = false
             EventKeybindsResponse(button).fire()
@@ -109,10 +120,11 @@ object ImGuiScreenFeature : ImGuiScreen(
             keybindReleased()
             return true
         }
-        return super.mouseClicked(mouseX, mouseY, button)
+        return super.mouseClicked(event, doubleClick)
     }
 
     override fun renderImGui() {
+        renderMario()
         if (Schizoid.DEVELOPER_MODE) devTools.render()
         search.render()
         configManager.render()
@@ -127,8 +139,13 @@ object ImGuiScreenFeature : ImGuiScreen(
         }
     }
 
-    override fun shouldPause() = false
+    override fun keybindReleased() {
+        if (mc.level == null) super.keybindReleased()
+        else SpatialWorldController.toggle()
+    }
+
+    override fun isPauseScreen() = false
 
     override val shouldHandleEvents
-        get() = mc.currentScreen == this
+        get() = mc.gui.screen() == this || (mc.gui.screen() == null && SpatialWorldController.visible)
 }

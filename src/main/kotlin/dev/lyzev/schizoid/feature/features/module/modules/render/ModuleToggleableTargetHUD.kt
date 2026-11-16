@@ -8,17 +8,22 @@ package dev.lyzev.schizoid.feature.features.module.modules.render
 import dev.lyzev.api.events.EventAttackEntityPre
 import dev.lyzev.api.events.on
 import dev.lyzev.api.imgui.font.ImGuiFonts
+import dev.lyzev.api.opengl.Render
+import dev.lyzev.api.opengl.glId
 import dev.lyzev.api.setting.settings.slider
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleableRenderImGuiContent
 import imgui.ImGui.*
 import imgui.flag.ImGuiCol
 import imgui.flag.ImGuiWindowFlags
-import net.minecraft.client.gui.screen.ingame.HandledScreen
-import net.minecraft.client.network.PlayerListEntry
-import net.minecraft.client.render.entity.LivingEntityRenderer
-import net.minecraft.client.texture.AbstractTexture
-import net.minecraft.entity.player.PlayerEntity
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
+import net.minecraft.client.renderer.entity.player.AvatarRenderer
+import net.minecraft.client.resources.SkinManager
+import net.minecraft.world.entity.player.Player
+import net.minecraft.world.entity.player.PlayerModelPart
+import net.minecraft.world.entity.player.PlayerSkin
+import com.mojang.authlib.GameProfile
+import java.util.function.Supplier
 
 object ModuleToggleableTargetHUD : ModuleToggleableRenderImGuiContent(
     "Target HUD", "Shows information about the target.", category = IFeature.Category.RENDER
@@ -26,19 +31,34 @@ object ModuleToggleableTargetHUD : ModuleToggleableRenderImGuiContent(
 
     val duration by slider("Duration", "The duration of the target hud to show after hit.", 2000, 500, 10000, "ms")
 
-    var target: PlayerEntity? = null
-    private var abstractTexture: AbstractTexture? = null
+    var target: Player? = null
+    private var skinProfile: GameProfile? = null
+    private var skinManager: SkinManager? = null
+    private var skinLookup: Supplier<PlayerSkin>? = null
     private var lastHit = 0L
 
+    private fun selectSkin(player: Player) {
+        val manager = mc.skinManager
+        val profile = player.gameProfile
+        if (skinProfile != profile || skinManager !== manager) {
+            skinProfile = profile
+            skinManager = manager
+            skinLookup = manager.createLookup(profile, !mc.isLocalPlayer(profile.id()))
+        }
+    }
+
     override fun renderImGuiContent() {
-        if (abstractTexture != null) {
+        if (skinLookup != null) {
             val target = if (this.target == null) mc.player!! else this.target!!
-            val upsideDown = LivingEntityRenderer.shouldFlipUpsideDown(target)
+            selectSkin(target)
+            val skin = checkNotNull(skinLookup).get()
+            val textureId = Render.isolated { mc.textureManager.getTexture(skin.body().texturePath()).glId }
+            val upsideDown = target.isModelPartShown(PlayerModelPart.CAPE) && AvatarRenderer.isPlayerUpsideDown(target)
             val uvMinY = 8f + (if (upsideDown) 8f else 0f)
             val uvMaxY = 8f * (if (upsideDown) -1f else 1f) + uvMinY
             val cursorScreenPos = getCursorScreenPos()
             getWindowDrawList().addImageRounded(
-                abstractTexture!!.glId,
+                textureId,
                 cursorScreenPos.x,
                 cursorScreenPos.y,
                 cursorScreenPos.x + 50f,
@@ -75,20 +95,18 @@ object ModuleToggleableTargetHUD : ModuleToggleableRenderImGuiContent(
         }
         if (System.currentTimeMillis() - lastHit > duration) {
             this.target = null
-            val skinTextures = PlayerListEntry.texturesSupplier(mc.player!!.gameProfile).get()
-            abstractTexture = mc.textureManager.getTexture(skinTextures!!.texture)
+            selectSkin(mc.player!!)
         }
     }
 
     override val shouldDrawWindow: Boolean
-        get() = shouldHandleEvents && mc.currentScreen !is HandledScreen<*> && (target != null || mc.currentScreen != null) && mc.player != null
+        get() = shouldHandleEvents && mc.gui.screen() !is AbstractContainerScreen<*> && (target != null || mc.gui.screen() != null) && mc.player != null
 
     init {
         on<EventAttackEntityPre> {
-            if (it.entity !is PlayerEntity) return@on
+            if (it.entity !is Player) return@on
             target = it.entity
-            val skinTextures = PlayerListEntry.texturesSupplier(target!!.gameProfile).get()
-            abstractTexture = mc.textureManager.getTexture(skinTextures!!.texture)
+            selectSkin(target!!)
             lastHit = System.currentTimeMillis()
         }
     }

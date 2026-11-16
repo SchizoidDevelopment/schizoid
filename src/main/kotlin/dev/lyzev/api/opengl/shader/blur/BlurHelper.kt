@@ -5,136 +5,138 @@
 
 package dev.lyzev.api.opengl.shader.blur
 
-import com.mojang.blaze3d.platform.GlConst
-import com.mojang.blaze3d.platform.GlStateManager
+import com.mojang.blaze3d.pipeline.RenderTarget
 import com.mojang.blaze3d.systems.RenderSystem
+import com.mojang.blaze3d.textures.GpuTextureView
+import dev.lyzev.api.opengl.GlStateSnapshot
 import dev.lyzev.api.opengl.Render
 import dev.lyzev.api.opengl.WrappedFramebuffer
-import dev.lyzev.api.opengl.clear
 import dev.lyzev.api.opengl.shader.Shader.Companion.drawFullScreen
 import dev.lyzev.api.opengl.shader.ShaderAcrylic
 import dev.lyzev.api.opengl.shader.ShaderAdd
 import dev.lyzev.api.opengl.shader.ShaderMask
+import dev.lyzev.api.opengl.shader.ShaderPassThrough
 import dev.lyzev.api.opengl.shader.ShaderTint
-import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.features.module.modules.render.ModuleToggleableBlur
-import dev.lyzev.schizoid.feature.features.module.modules.render.ModuleToggleableBlur.mc
-import net.minecraft.client.MinecraftClient
-import net.minecraft.util.math.MathHelper
 import org.joml.Vector3f
-import org.lwjgl.opengl.GL13.GL_TEXTURE0
-import org.lwjgl.opengl.GL13.GL_TEXTURE1
+import org.lwjgl.opengl.GL33C.*
 
-/**
- * A helper object for handling blur effects.
- */
 object BlurHelper {
 
-    /**
-     * Gets the current blur mode.
-     */
     val mode: Blurs
         get() = ModuleToggleableBlur.method.value
 
-    private val mask = WrappedFramebuffer()
-    private val tmp = WrappedFramebuffer()
+    private var mask = WrappedFramebuffer("BlurMask")
+    private var mergedMask = WrappedFramebuffer("BlurMaskMerge")
+    private val tmp = WrappedFramebuffer("BlurContent")
+    private val fbos = arrayOf(WrappedFramebuffer("BlurAcrylic"), WrappedFramebuffer("BlurTint"))
+    private val dropShadow = WrappedFramebuffer("BlurDropShadow")
+    private var capture: Capture? = null
 
-    private val fbos = arrayOf(WrappedFramebuffer(), WrappedFramebuffer())
-    private val acrylicBlur = WrappedFramebuffer()
-    private val dropShadow = WrappedFramebuffer()
+    private class Capture(
+        val state: GlStateSnapshot,
+        val colorOverride: GpuTextureView?,
+        val depthOverride: GpuTextureView?,
+        val fbo: Int,
+        val viewport: IntArray
+    )
 
-    /**
-     * Begins the blur process.
-     */
+    /** Call around actual GUI drawing, never around GuiGraphicsExtractor extraction. */
     @JvmStatic
     fun begin() {
-        if (!ModuleToggleableBlur.isEnabled) return
+        if (!ModuleToggleableBlur.isActive) return
+        check(capture == null) { "Blur content capture is already active" }
+        capture = Capture(
+            GlStateSnapshot.capture(), RenderSystem.outputColorTextureOverride, RenderSystem.outputDepthTextureOverride,
+            glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING), IntArray(4).also { glGetIntegerv(GL_VIEWPORT, it) }
+        )
         tmp.clear()
         tmp.beginWrite(true)
+        RenderSystem.outputColorTextureOverride = tmp.getColorTextureView()
+        RenderSystem.outputDepthTextureOverride = null
     }
 
-    /**
-     * Ends the blur process.
-     */
     @JvmStatic
     fun end() {
-        if (!ModuleToggleableBlur.isEnabled) return
-        addTmpToMask()
-        addTmpToScene()
-        RenderSystem.enableCull()
+        val capture = capture ?: return
+        RenderSystem.outputColorTextureOverride = capture.colorOverride
+        RenderSystem.outputDepthTextureOverride = capture.depthOverride
+        try {
+            addTmpToMask()
+            addTmpToScene()
+        } finally {
+            this.capture = null
+            capture.state.restore()
+        }
     }
 
-    /**
-     * Adds the temporary buffer to the mask.
-     */
     @JvmStatic
     fun addTmpToMask() {
-        if (!ModuleToggleableBlur.isEnabled) return
-        setupRenderState()
-        mask.beginWrite(true)
-        drawTextures(tmp, mask, false)
+        if (!ModuleToggleableBlur.isActive) return
+        Render.isolated {
+            Render.prepareFullscreen()
+            glDisable(GL_BLEND)
+            mergedMask.clear()
+            mergedMask.beginWrite(true)
+            // Sampling mask while writing to that same texture is undefined on OpenGL.
+            ShaderAdd.bind()
+            glActiveTexture(GL_TEXTURE1)
+            tmp.beginRead()
+            glActiveTexture(GL_TEXTURE0)
+            mask.beginRead()
+            ShaderAdd["Tex0"] = 0
+            ShaderAdd["Tex1"] = 1
+            ShaderAdd["Alpha"] = false
+            drawFullScreen()
+            ShaderAdd.unbind()
+            val previous = mask
+            mask = mergedMask
+            mergedMask = previous
+        }
     }
 
-    /**
-     * Adds the temporary buffer to the scene.
-     */
     @JvmStatic
     fun addTmpToScene() {
-        if (!ModuleToggleableBlur.isEnabled) return
-        setupRenderState()
-        MinecraftClient.getInstance().framebuffer.beginWrite(true)
-        drawTextures(tmp, mask, true)
+        if (!ModuleToggleableBlur.isActive) return
+        Render.isolated {
+            Render.prepareFullscreen()
+            val capture = capture
+            if (capture == null) Render.bindMainTarget()
+            else {
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, capture.fbo)
+                with(capture.viewport) { glViewport(this[0], this[1], this[2], this[3]) }
+            }
+            // Rendering to a transparent FBO produces premultiplied color.
+            glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+            ShaderPassThrough.bind()
+            glActiveTexture(GL_TEXTURE0)
+            tmp.beginRead()
+            ShaderPassThrough["Tex0"] = 0
+            ShaderPassThrough["Scale"] = 1f
+            ShaderPassThrough["Alpha"] = true
+            drawFullScreen()
+            ShaderPassThrough.unbind()
+        }
     }
 
-    /**
-     * Sets up the render state.
-     */
-    private fun setupRenderState() {
-        RenderSystem.disableCull()
-        RenderSystem.defaultBlendFunc()
-        RenderSystem.enableBlend()
-    }
-
-    /**
-     * Draws textures to the fbo.
-     */
-    private fun drawTextures(texture1: WrappedFramebuffer, texture0: WrappedFramebuffer, alpha: Boolean) {
-        ShaderAdd.bind()
-        RenderSystem.activeTexture(GL_TEXTURE1)
-        texture1.beginRead()
-        RenderSystem.activeTexture(GL_TEXTURE0)
-        texture0.beginRead()
-        ShaderAdd["Tex0"] = 0
-        ShaderAdd["Tex1"] = 1
-        ShaderAdd["Alpha"] = alpha
-        drawFullScreen()
-        ShaderAdd.unbind()
-    }
-
-    /**
-     * Draws the blur effect.
-     */
     fun draw(
         mask: WrappedFramebuffer = BlurHelper.mask,
         clearMask: Boolean = true,
         useDefaultFbo: Boolean = false,
         dropShadowColor: Vector3f = Vector3f(0f, 0f, 0f),
         blurStrength: Int = ModuleToggleableBlur.strength,
-        dropShadowStrength: Int = ModuleToggleableBlur.dropShadowStrength
-    ) {
-        Render.store()
-        setupRenderState()
-
+        dropShadowStrength: Int = ModuleToggleableBlur.dropShadowStrength,
+        sourceFBO: RenderTarget = Render.mainFramebuffer
+    ) = Render.isolated {
+        Render.prepareFullscreen()
         mode.switchStrength(blurStrength)
-        mode.render()
-
+        mode.render(sourceFBO)
         var i = 0
 
-        // Acrylic (Luminosity, Noise and Tint)
         if (ModuleToggleableBlur.acrylic) {
             fbos[i].beginWrite(true)
             ShaderAcrylic.bind()
-            RenderSystem.activeTexture(GL_TEXTURE0)
+            glActiveTexture(GL_TEXTURE0)
             mode.output.beginRead()
             ShaderAcrylic["Tex0"] = 0
             ShaderAcrylic["Luminosity"] = ModuleToggleableBlur.luminosity / 100f
@@ -148,32 +150,28 @@ object BlurHelper {
         if (ModuleToggleableBlur.RGBPuke) {
             fbos[i].beginWrite(true)
             ShaderTint.bind()
-            RenderSystem.activeTexture(GL_TEXTURE0)
-            if (i == 0) mode.output.beginRead()
-            else fbos[i - 1].beginRead()
+            glActiveTexture(GL_TEXTURE0)
+            if (i == 0) mode.output.beginRead() else fbos[i - 1].beginRead()
             ShaderTint["Tex0"] = 0
-            ShaderTint["RGBPuke"] = ModuleToggleableBlur.RGBPuke
+            ShaderTint["RGBPuke"] = true
             ShaderTint.set("SV", ModuleToggleableBlur.RGBPukeSaturation / 100f, ModuleToggleableBlur.RGBPukeBrightness / 100f)
             ShaderTint["Opacity"] = ModuleToggleableBlur.RGBPukeOpacity / 100f
             ShaderTint["Alpha"] = false
             ShaderTint["Multiplier"] = 1f
             ShaderTint["Time"] = (System.nanoTime() - ShaderTint.initTime) / 1000000000f
-            ShaderTint["Yaw"] = mc.player?.yaw ?: 0f
-            ShaderTint["Pitch"] = mc.player?.pitch ?: 0f
+            ShaderTint["Yaw"] = Render.cameraYaw
+            ShaderTint["Pitch"] = Render.cameraPitch
             drawFullScreen()
             ShaderTint.unbind()
             i++
         }
 
-        Schizoid.mc.framebuffer.beginWrite(true)
-        if (useDefaultFbo)
-            GlStateManager._glBindFramebuffer(GlConst.GL_FRAMEBUFFER, 0)
+        bindDestination(useDefaultFbo)
         ShaderMask.bind()
-        RenderSystem.activeTexture(GL_TEXTURE1)
+        glActiveTexture(GL_TEXTURE1)
         mask.beginRead()
-        RenderSystem.activeTexture(GL_TEXTURE0)
-        if (i == 0) mode.output.beginRead()
-        else fbos[i - 1].beginRead()
+        glActiveTexture(GL_TEXTURE0)
+        if (i == 0) mode.output.beginRead() else fbos[i - 1].beginRead()
         ShaderMask["Tex0"] = 0
         ShaderMask["Tex1"] = 1
         ShaderMask["Invert"] = false
@@ -183,11 +181,10 @@ object BlurHelper {
         if (ModuleToggleableBlur.dropShadow) {
             mode.switchStrength(dropShadowStrength)
             mode.render(mask, true)
-
             dropShadow.clear()
             dropShadow.beginWrite(true)
             ShaderTint.bind()
-            RenderSystem.activeTexture(GL_TEXTURE0)
+            glActiveTexture(GL_TEXTURE0)
             mode.output.beginRead()
             ShaderTint["Tex0"] = 0
             ShaderTint["Color"] = dropShadowColor
@@ -197,18 +194,16 @@ object BlurHelper {
             ShaderTint["Alpha"] = true
             ShaderTint["Multiplier"] = ModuleToggleableBlur.dropShadowMultiplier / 100f
             ShaderTint["Time"] = (System.nanoTime() - ShaderTint.initTime) / 1000000000f
-            ShaderTint["Yaw"] = mc.player?.yaw ?: 0f
-            ShaderTint["Pitch"] = mc.player?.pitch ?: 0f
+            ShaderTint["Yaw"] = Render.cameraYaw
+            ShaderTint["Pitch"] = Render.cameraPitch
             drawFullScreen()
             ShaderTint.unbind()
 
-            Schizoid.mc.framebuffer.beginWrite(true)
-            if (useDefaultFbo)
-                GlStateManager._glBindFramebuffer(GlConst.GL_FRAMEBUFFER, 0)
+            bindDestination(useDefaultFbo)
             ShaderMask.bind()
-            RenderSystem.activeTexture(GL_TEXTURE1)
+            glActiveTexture(GL_TEXTURE1)
             mask.beginRead()
-            RenderSystem.activeTexture(GL_TEXTURE0)
+            glActiveTexture(GL_TEXTURE0)
             dropShadow.beginRead()
             ShaderMask["Tex0"] = 0
             ShaderMask["Tex1"] = 1
@@ -216,9 +211,10 @@ object BlurHelper {
             drawFullScreen()
             ShaderMask.unbind()
         }
-
-        RenderSystem.enableCull()
-        Render.restore()
         if (clearMask) mask.clear()
+    }
+
+    private fun bindDestination(defaultFbo: Boolean) {
+        if (defaultFbo) Render.bindDefaultTarget() else Render.bindMainTarget()
     }
 }

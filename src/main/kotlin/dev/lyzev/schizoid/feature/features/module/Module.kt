@@ -11,6 +11,7 @@ import dev.lyzev.api.events.EventRenderImGuiContent
 import dev.lyzev.api.events.on
 import dev.lyzev.api.glfw.GLFWKey
 import dev.lyzev.api.imgui.font.ImGuiFonts.*
+import dev.lyzev.api.imgui.spatial.SpatialPins
 import dev.lyzev.api.setting.SettingClient
 import dev.lyzev.api.setting.settings.OptionEnum
 import dev.lyzev.api.setting.settings.multiOption
@@ -71,6 +72,8 @@ abstract class ModuleRunnable(
         }
         val treeNode = treeNode(name)
         if (isItemHovered()) setTooltip(desc)
+        // Feeds the world workspace's Ctrl+wheel pin gesture; a no-op for the desktop screen.
+        if (isItemHovered()) SpatialPins.hovered = name
         if (treeNode) {
             @Suppress("UNCHECKED_CAST")
             if (button("Reset", getColumnWidth(), OPEN_SANS_REGULAR.size + getStyle().framePaddingY * 2)) {
@@ -96,7 +99,7 @@ abstract class ModuleRunnable(
     }
 
     override fun keybindReleased() {
-        if (mc.currentScreen == null) response = invoke()
+        if (mc.gui.screen() == null) response = invoke()
     }
 }
 
@@ -155,13 +158,13 @@ abstract class ModuleToggleable(
     protected open fun onDisable() {}
 
     override fun keybindReleased() {
-        if (mc.currentScreen == null) toggle()
+        if (mc.gui.screen() == null) toggle()
     }
 
     enum class DisableOn : OptionEnum {
         Screen {
             override fun handle(toggleable: ModuleToggleable) {
-                if (Schizoid.mc.currentScreen != null) toggleable.toggle()
+                if (Schizoid.mc.gui.screen() != null) toggleable.toggle()
             }
         },
         Death {
@@ -217,7 +220,7 @@ abstract class ModuleToggleableRenderImGuiContent(
         on<EventRenderImGuiContent> {
             if (!shouldDrawWindow) return@on
             OPEN_SANS_BOLD.begin()
-            if (mc.currentScreen == null) {
+            if (mc.gui.screen() == null) {
                 if (begin("\"${name.uppercase()}\"", windowFlags or ImGuiWindowFlags.NoMove)) {
                     OPEN_SANS_REGULAR.begin()
                     renderImGuiContent()
@@ -230,8 +233,8 @@ abstract class ModuleToggleableRenderImGuiContent(
                         setTooltip("Middle-click to open in Feature Screen.")
                         if (isMouseClicked(2)) {
                             ImGuiScreenFeature.search.result = this
-                            if (mc.currentScreen !is ImGuiScreen)
-                                mc.setScreen(ImGuiScreenFeature)
+                            if (mc.gui.screen() !is ImGuiScreen)
+                                mc.gui.setScreen(ImGuiScreenFeature)
                         }
                     }
                     OPEN_SANS_REGULAR.begin()

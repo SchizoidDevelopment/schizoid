@@ -5,7 +5,7 @@
 
 package dev.lyzev.schizoid.feature.features.module.modules.render
 
-import com.mojang.blaze3d.systems.RenderSystem
+import com.mojang.blaze3d.platform.NativeImage
 import dev.lyzev.api.animation.EasingFunction
 import dev.lyzev.api.animation.TimeAnimator
 import dev.lyzev.api.cryptography.hash.Sha512
@@ -38,8 +38,10 @@ import imgui.ImVec2
 import imgui.flag.ImGuiCol
 import imgui.flag.ImGuiStyleVar
 import imgui.flag.ImGuiWindowFlags
-import net.minecraft.client.texture.NativeImage
-import org.lwjgl.opengl.GL13
+import org.lwjgl.opengl.GL13.GL_TEXTURE0
+import org.lwjgl.opengl.GL13.glActiveTexture
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
     "Media Player", "The OS media player visualized with ImGui.", category = IFeature.Category.RENDER
@@ -63,56 +65,66 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
         "51ee4a2b0b0a7020bd38ac604030a02c6f0c9c297c73afe80446c3f92ba69399d27e231ab08eeb7204df7cd81e163f57bd12b716083770dc5f745e1654af9329", // Chrome
         "408b4bbece1ba73dbeb3b46bd31f43002fc775bc21164f4a08dd038133529c736be3fe9c578b8ad3fd74ba1aad9521d9b8b2bbf606971b30e5cfa8e83d27a7b1" // Vivaldi
     )
-    private var session: IMediaSession? = null
+    private data class Snapshot(val session: IMediaSession?, val media: MediaInfo)
+    private val snapshot = AtomicReference<Snapshot?>(null)
+    private val polling = AtomicBoolean(false)
+    // Render-thread state; never accessed by the polling or input threads.
+    private var renderedMedia: MediaInfo? = null
     private val blurredArtwork = WrappedFramebuffer(width = 1000, height = 1000, fixedSize = true)
 
     override fun renderImGuiContent() = with(getCursorScreenPos()) {
+        // Capture once: every element in this frame observes the same publication.
+        val frame = snapshot.get()
+        val media = frame?.media
+        val previous = renderedMedia
+        if (media != null && (previous == null || previous.title != media.title ||
+                    previous.artist != media.artist || !previous.artworkPng.contentEquals(media.artworkPng))) {
+            Info.entries.forEach { it.update(media) }
+            renderedMedia = media
+        }
         val drawList = getWindowDrawList()
         dummy(370f, 80f)
         drawList.addImageRounded(
             blurredArtwork.colorAttachment, x, y + 5, x + 370, y + 75, 0.2f, 0.31f, .8f, .46f, 0xFFAAAAAA.toInt(), 5f
         )
-        Info.entries.forEach { it.render(this) }
+        Info.entries.forEach { it.render(this, frame) }
     }
 
     init {
         on<EventScheduleTask> {
-            val session =
-                MediaPlayerInfo.getMediaSessions().sortedBy {
-                    owner.forEachIndexed { index, s ->
-                        if (it.owner.uppercase().contains(s)) return@sortedBy index
+            if (!polling.compareAndSet(false, true)) return@on
+            try {
+                val session =
+                    MediaPlayerInfo.getMediaSessions().sortedBy {
+                        owner.forEachIndexed { index, s ->
+                            if (it.owner.uppercase().contains(s)) return@sortedBy index
+                        }
+                        return@sortedBy owner.size
                     }
-                    return@sortedBy owner.size
-                }
-                    .firstOrNull {
-                        it.media.artist.isNotEmpty() || it.media.title.isNotEmpty()
-                    }
-            if (session == null) {
-                val dummy = MediaInfo(
-                    "Waiting for media." + ".".repeat(((System.currentTimeMillis() / 1000) % 3).toInt()),
-                    "",
-                    ByteArray(0),
-                    0,
-                    1,
-                    true
-                )
-                Info.entries.forEach { it.update(dummy) }
-                this.session = null
-            } else {
-                if (this.session == null || this.session!!.media.title != session.media.title || this.session!!.media.artist != session.media.artist || !this.session!!.media.artworkPng.contentEquals(
-                        session.media.artworkPng
+                        .firstOrNull {
+                            it.media.artist.isNotEmpty() || it.media.title.isNotEmpty()
+                        }
+                if (session == null) {
+                    val dummy = MediaInfo(
+                        "Waiting for media." + ".".repeat(((System.currentTimeMillis() / 1000) % 3).toInt()),
+                        "",
+                        ByteArray(0),
+                        0,
+                        1,
+                        true
                     )
-                ) Info.entries.forEach {
-                    it.update(
-                        session.media
-                    )
+                    snapshot.set(Snapshot(null, dummy))
+                } else {
+                    snapshot.set(Snapshot(session, session.media))
                 }
-                this.session = session
+            } finally {
+                polling.set(false)
             }
         }
 
         on<EventKeystroke> { event ->
-            if ((Schizoid.mc.currentScreen == null || keybindsInScreen) && event.action == 1) {
+            if ((Schizoid.mc.gui.screen() == null || keybindsInScreen) && event.action == 1) {
+                val session = snapshot.get()?.session
                 if (session != null) {
                     if (skip.contains(GLFWKey[event.key])) {
                         session!!.next()
@@ -128,7 +140,8 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
         }
 
         on<EventMouseClick> { event ->
-            if ((Schizoid.mc.currentScreen == null || keybindsInScreen) && event.action == 1) {
+            if ((Schizoid.mc.gui.screen() == null || keybindsInScreen) && event.action == 1) {
+                val session = snapshot.get()?.session
                 if (session != null) {
                     if (skip.contains(GLFWKey[event.button])) {
                         session!!.next()
@@ -144,7 +157,7 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
         }
     }
 
-    enum class Info {
+    private enum class Info {
         Title {
 
             private var title: String? = null
@@ -156,7 +169,7 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
                 timeAnimator.setProgress(0.0)
             }
 
-            override fun render(cursorPos: ImVec2) {
+            override fun render(cursorPos: ImVec2, frame: Snapshot?) {
                 if (title != null) {
                     ImGuiFonts.OPEN_SANS_BOLD_BIG.begin()
                     pushStyleVar(ImGuiStyleVar.WindowPadding, 0f, 0f)
@@ -199,7 +212,7 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
                 timeAnimator.setProgress(0.0)
             }
 
-            override fun render(cursorPos: ImVec2) {
+            override fun render(cursorPos: ImVec2, frame: Snapshot?) {
                 if (artist != null) {
                     ImGuiFonts.OPEN_SANS_BOLD_MEDIUM.begin()
                     pushStyleVar(ImGuiStyleVar.WindowPadding, 0f, 0f)
@@ -235,12 +248,12 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
 
             override fun update(media: MediaInfo) {}
 
-            override fun render(cursorPos: ImVec2) {
-                if (session == null) return
+            override fun render(cursorPos: ImVec2, frame: Snapshot?) {
+                val media = frame?.takeIf { it.session != null }?.media ?: return
                 setCursorPosY(getCursorPosY() + 28)
                 setCursorPosX(getCursorPosX() + 80)
                 pushStyleColor(ImGuiCol.PlotHistogram, getColorU32(ImGuiCol.Text, .4f))
-                progressBar(session!!.media.position / session!!.media.duration.toFloat(), 290f, 3f, "##Progress")
+                progressBar(media.position / media.duration.toFloat(), 290f, 3f, "##Progress")
                 popStyleColor()
             }
         },
@@ -250,12 +263,13 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
             private var media: MediaInfo? = null
 
             override fun update(media: MediaInfo) {
+                if (this.media?.artworkPng?.contentEquals(media.artworkPng) == true) return
                 if (artwork != null && artwork != fallbackArtwork) artwork!!.close()
                 artwork = null
                 this.media = media
             }
 
-            override fun render(cursorPos: ImVec2) {
+            override fun render(cursorPos: ImVec2, frame: Snapshot?) {
                 if (media == null) return
                 if (artwork == null) {
                     artwork =
@@ -263,26 +277,23 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
                                 .hashToString() in noArtwork
                         ) fallbackArtwork
                         else WrappedNativeImageBackedTexture(NativeImage.read(media!!.artworkPng.inputStream())).apply { upload() }
-                    Render.store()
-                    RenderSystem.disableCull()
-                    RenderSystem.defaultBlendFunc()
-                    RenderSystem.enableBlend()
-                    BlurHelper.mode.switchStrength(6)
-                    BlurHelper.mode.render(artwork!!.glId)
-                    blurredArtwork.clear()
-                    blurredArtwork.beginWrite(true)
-                    ShaderPassThrough.bind()
-                    RenderSystem.activeTexture(GL13.GL_TEXTURE0)
-                    BlurHelper.mode.blur.output.beginRead()
-                    ShaderPassThrough["Tex0"] = 0
-                    ShaderPassThrough["Scale"] = 1f
-                    ShaderPassThrough["Alpha"] = true
-                    Shader.drawFullScreen()
-                    ShaderPassThrough.unbind()
-                    mc.framebuffer.beginWrite(true)
-                    RenderSystem.enableCull()
-                    Render.store()
+                    Render.isolated {
+                        Render.prepareFullscreen()
+                        BlurHelper.mode.switchStrength(6)
+                        BlurHelper.mode.render(artwork!!.glId)
+                        blurredArtwork.clear()
+                        blurredArtwork.beginWrite(true)
+                        ShaderPassThrough.bind()
+                        glActiveTexture(GL_TEXTURE0)
+                        BlurHelper.mode.output.beginRead()
+                        ShaderPassThrough["Tex0"] = 0
+                        ShaderPassThrough["Scale"] = 1f
+                        ShaderPassThrough["Alpha"] = true
+                        Shader.drawFullScreen()
+                        ShaderPassThrough.unbind()
+                    }
                 }
+                val session = frame?.session
                 with(cursorPos) {
                     val drawList = getWindowDrawList()
                     drawList.addRectFilled(x, y, x + 80, y + 80, 0xFF000000.toInt(), 5f)
@@ -307,9 +318,9 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
 
             override fun update(media: MediaInfo) {}
 
-            override fun render(cursorPos: ImVec2) {
-                if (session == null) return
-                if (!session!!.media.playing) {
+            override fun render(cursorPos: ImVec2, frame: Snapshot?) {
+                val media = frame?.takeIf { it.session != null }?.media ?: return
+                if (!media.playing) {
                     if (System.currentTimeMillis() / 500 % 2 == 0L) {
                         ImGuiFonts.FONT_AWESOME_SOLID.begin()
                         getWindowDrawList().addText(
@@ -336,6 +347,6 @@ object ModuleToggleableMediaPlayer : ModuleToggleableRenderImGuiContent(
 
         abstract fun update(media: MediaInfo)
 
-        abstract fun render(cursorPos: ImVec2)
+        abstract fun render(cursorPos: ImVec2, frame: Snapshot?)
     }
 }

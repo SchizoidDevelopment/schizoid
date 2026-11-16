@@ -20,13 +20,13 @@ object ModuleRunnableClip :
     override fun invoke(): String? {
         if (mc.player == null || !isIngame) return "You are not in a game."
         val player = mc.player!!
-        val lookVec = player.rotationVecClient
-        if (player.hasVehicle()) player.vehicle!!.setPosition(
+        val lookVec = player.getViewVector(1f)
+        if (player.isPassenger) player.vehicle!!.setPos(
             player.vehicle!!.x + lookVec.x * horizontal,
             player.vehicle!!.y + (if (verticalLook) vertical * lookVec.y else vertical.toDouble()),
             player.vehicle!!.z + lookVec.z * horizontal
         )
-        player.setPosition(
+        player.setPos(
             player.x + lookVec.x * horizontal,
             player.y + (if (verticalLook) vertical * lookVec.y else vertical.toDouble()),
             player.z + lookVec.z * horizontal

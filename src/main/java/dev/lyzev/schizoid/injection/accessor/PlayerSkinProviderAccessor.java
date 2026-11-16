@@ -5,11 +5,11 @@
 
 package dev.lyzev.schizoid.injection.accessor;
 
-import net.minecraft.client.texture.PlayerSkinProvider;
+import net.minecraft.client.resources.SkinManager;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
-@Mixin(PlayerSkinProvider.class)
+@Mixin(SkinManager.class)
 public interface PlayerSkinProviderAccessor {
 
     /**
@@ -17,6 +17,6 @@ public interface PlayerSkinProviderAccessor {
      *
      * @return the skin cache
      */
-    @Accessor
-    PlayerSkinProvider.FileCache getSkinCache();
+    @Accessor("skinTextures")
+    SkinManager.TextureCache getSkinCache();
 }

@@ -11,9 +11,9 @@ import dev.lyzev.api.events.on
 import dev.lyzev.api.setting.settings.slider
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.entity.Entity
-import net.minecraft.entity.vehicle.BoatEntity
-import net.minecraft.util.math.Vec3d
+import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.vehicle.boat.AbstractBoat
+import net.minecraft.world.phys.Vec3
 
 object ModuleToggleableBoatBounce :
     ModuleToggleable("Boat Bounce", "Makes boats bounce.", category = IFeature.Category.MOVEMENT), EventListener {
@@ -23,25 +23,25 @@ object ModuleToggleableBoatBounce :
     init {
         on<EventClientPlayerEntityTick> { event ->
             val vehicle = event.player.vehicle
-            if (vehicle is BoatEntity) {
-                val vel = Entity.movementInputToVelocity(
-                    Vec3d(
-                        event.player.sidewaysSpeed.toDouble(),
-                        event.player.upwardSpeed.toDouble(),
-                        event.player.forwardSpeed.toDouble()
+            if (vehicle is AbstractBoat) {
+                val vel = Entity.getInputVector(
+                    Vec3(
+                        event.player.xxa.toDouble(),
+                        event.player.yya.toDouble(),
+                        event.player.zza.toDouble()
                     ),
-                    ((if (mc.options.sprintKey.isPressed) .1f else .05f) * bounce / 2f),
-                    event.player.yaw
+                    ((if (mc.options.keySprint.isDown) .1f else .05f) * bounce / 2f),
+                    event.player.yRot
                 )
-                vehicle.setPosition(
-                    vehicle.x + vel.getX(),
-                    vehicle.y + vel.getY() + (if (mc.options.sprintKey.isPressed) 1f else .5f) * bounce / 10f,
-                    vehicle.z + vel.getZ()
+                vehicle.setPos(
+                    vehicle.x + vel.x,
+                    vehicle.y + vel.y + (if (mc.options.keySprint.isDown) 1f else .5f) * bounce / 10f,
+                    vehicle.z + vel.z
                 )
             }
         }
     }
 
     override val shouldHandleEvents: Boolean
-        get() = isEnabled
+        get() = isEnabled && mc.player != null
 }

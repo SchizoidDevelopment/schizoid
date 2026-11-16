@@ -13,7 +13,7 @@ object ModuleRunnableCopyIp :
 
     override fun invoke(): String? {
         if (!isMultiplayer) return "You are not connected to a server."
-        copy(mc.currentServerEntry!!.address)
+        copy(mc.currentServer!!.ip)
         return null
     }
 }

@@ -12,7 +12,7 @@ object ModuleRunnableClearHistory :
     ModuleRunnable("Clear History", "Clears the chat history.", category = IFeature.Category.UTIL) {
 
     override fun invoke(): String? {
-        mc.inGameHud.chatHud.messageHistory.clear()
+        mc.gui.hud.chat.recentChat.clear()
         return null
     }
 }

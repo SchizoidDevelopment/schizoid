@@ -5,17 +5,18 @@
 
 package dev.lyzev.schizoid.injection.accessor;
 
-import com.mojang.authlib.minecraft.MinecraftSessionService;
 import com.mojang.authlib.minecraft.UserApiService;
 import com.mojang.authlib.yggdrasil.ProfileResult;
-import com.mojang.authlib.yggdrasil.YggdrasilAuthenticationService;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.SocialInteractionsManager;
-import net.minecraft.client.realms.RealmsPeriodicCheckers;
-import net.minecraft.client.session.ProfileKeys;
-import net.minecraft.client.session.Session;
-import net.minecraft.client.session.report.AbuseReportContext;
-import net.minecraft.client.texture.PlayerSkinProvider;
+import com.mojang.realmsclient.gui.RealmsDataFetcher;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
+import net.minecraft.client.gui.screens.social.PlayerSocialManager;
+import net.minecraft.client.gui.screens.social.RemoteFriendListUpdateHandler;
+import net.minecraft.client.multiplayer.ProfileKeyPairManager;
+import net.minecraft.client.multiplayer.chat.report.ReportingContext;
+import net.minecraft.client.resources.SkinManager;
+import net.minecraft.client.telemetry.ClientTelemetryManager;
+import net.minecraft.server.Services;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -26,44 +27,39 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Provides the means to access protected members of the Minecraft client.
  */
-@Mixin(MinecraftClient.class)
+@Mixin(Minecraft.class)
 public interface MinecraftClientAccessor {
+    @Accessor("missTime")
+    int getAttackCooldown();
+
     /**
      * Sets the Minecraft session.
      *
      * @param session new Minecraft session
      */
-    @Accessor
+    @Accessor("user")
     @Mutable
-    void setSession(Session session);
+    void setSession(User session);
 
     /**
      * Sets the game profile.
      *
      * @param future the future of the new game profile
      */
-    @Accessor
+    @Accessor("profileFuture")
     @Mutable
     void setGameProfileFuture(CompletableFuture<ProfileResult> future);
 
     /**
-     * Returns the Minecraft authentication service.
+     * Sets the services used for session joins, profiles and signature validation.
      *
-     * @return the Minecraft authentication service
+     * @param services new Minecraft services
      */
-    @Accessor
-    YggdrasilAuthenticationService getAuthenticationService();
-
-    /**
-     * Sets the Minecraft authentication service.
-     *
-     * @param authenticationService new Minecraft authentication service
-     */
-    @Accessor
+    @Accessor("services")
     @Mutable
-    void setAuthenticationService(YggdrasilAuthenticationService authenticationService);
+    void setServices(Services services);
 
-    @Accessor
+    @Accessor("proxy")
     Proxy getNetworkProxy();
 
     /**
@@ -71,63 +67,72 @@ public interface MinecraftClientAccessor {
      *
      * @param userApiService new Minecraft user API service
      */
-    @Accessor
+    @Accessor("userApiService")
     @Mutable
     void setUserApiService(UserApiService userApiService);
 
     /**
-     * Sets the Minecraft session service.
+     * Sets the cached permissions and restrictions for the current user.
      *
-     * @param sessionService new Minecraft session service
+     * @param future the future of the new user properties
      */
-    @Accessor
+    @Accessor("userPropertiesFuture")
     @Mutable
-    void setSessionService(MinecraftSessionService sessionService);
+    void setUserPropertiesFuture(CompletableFuture<UserApiService.UserProperties> future);
 
     /**
      * Sets the Minecraft skin provider.
      *
      * @param skinProvider new Minecraft skin provider
      */
-    @Accessor
+    @Accessor("skinManager")
     @Mutable
-    void setSkinProvider(PlayerSkinProvider skinProvider);
+    void setSkinProvider(SkinManager skinProvider);
 
     /**
      * Sets the Minecraft social interactions manager.
      *
      * @param socialInteractionsManager new Minecraft social interactions manager
      */
-    @Accessor
+    @Accessor("playerSocialManager")
     @Mutable
-    void setSocialInteractionsManager(SocialInteractionsManager socialInteractionsManager);
+    void setSocialInteractionsManager(PlayerSocialManager socialInteractionsManager);
+
+    @Accessor("remoteFriendListUpdateHandler")
+    RemoteFriendListUpdateHandler getRemoteFriendListUpdateHandler();
+
+    @Accessor("remoteFriendListUpdateHandler")
+    @Mutable
+    void setRemoteFriendListUpdateHandler(RemoteFriendListUpdateHandler handler);
 
     /**
      * Sets the Minecraft profile keys.
      *
      * @param profileKeys new Minecraft profile keys
      */
-    @Accessor
+    @Accessor("profileKeyPairManager")
     @Mutable
-    void setProfileKeys(ProfileKeys profileKeys);
+    void setProfileKeys(ProfileKeyPairManager profileKeys);
 
     /**
      * Sets the Minecraft abuse report context.
      *
      * @param abuseReportContext new Minecraft abuse report context
      */
-    @Accessor
+    @Accessor("reportingContext")
     @Mutable
-    void setAbuseReportContext(AbuseReportContext abuseReportContext);
+    void setAbuseReportContext(ReportingContext abuseReportContext);
 
     /**
      * Sets the Minecraft Realms periodic checkers.
      *
      * @param realmsPeriodicCheckers new Minecraft Realms periodic checkers
      */
-    @Accessor
+    @Accessor("realmsDataFetcher")
     @Mutable
-    void setRealmsPeriodicCheckers(RealmsPeriodicCheckers realmsPeriodicCheckers);
+    void setRealmsPeriodicCheckers(RealmsDataFetcher realmsPeriodicCheckers);
 
-
+    @Accessor("telemetryManager")
+    @Mutable
+    void setTelemetryManager(ClientTelemetryManager telemetryManager);
 }

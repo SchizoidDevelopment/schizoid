@@ -35,8 +35,8 @@ object ModuleToggleableVirtualMousepad :
 
     override fun renderImGuiContent() = with(getCursorScreenPos()) {
         val drawList = getWindowDrawList()
-        val width = mc.window.framebufferWidth * size / 100f
-        val height = mc.window.framebufferHeight * size / 100f
+        val width = mc.window.width * size / 100f
+        val height = mc.window.height * size / 100f
         dummy(width, height)
         val line = ImColor.rgba(getStyle().getColor(ImGuiCol.Text))
         drawList.addRectFilled(x, y, x + width, y + height, getColorU32(ImGuiCol.WindowBg), 5f)
@@ -73,9 +73,9 @@ object ModuleToggleableVirtualMousepad :
 
     init {
         on<EventClientPlayerEntityTick> { event ->
-            val rotation = lastRotation ?: (event.player.lastYaw to event.player.lastPitch)
-            rotations += (event.player.lastYaw - rotation.first) to (event.player.lastPitch - rotation.second)
-            lastRotation = event.player.lastYaw to event.player.lastPitch
+            val rotation = lastRotation ?: (event.player.yRotLast to event.player.xRotLast)
+            rotations += (event.player.yRotLast - rotation.first) to (event.player.xRotLast - rotation.second)
+            lastRotation = event.player.yRotLast to event.player.xRotLast
             if (rotations.size > length) rotations.removeFirst()
         }
     }

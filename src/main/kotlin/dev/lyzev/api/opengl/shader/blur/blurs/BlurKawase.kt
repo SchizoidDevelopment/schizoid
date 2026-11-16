@@ -5,15 +5,14 @@
 
 package dev.lyzev.api.opengl.shader.blur.blurs
 
-import com.mojang.blaze3d.platform.GlConst
-import com.mojang.blaze3d.systems.RenderSystem
+import dev.lyzev.api.opengl.Render
 import dev.lyzev.api.opengl.WrappedFramebuffer
 import dev.lyzev.api.opengl.clear
 import dev.lyzev.api.opengl.shader.Shader
 import dev.lyzev.api.opengl.shader.ShaderKawase
 import dev.lyzev.api.opengl.shader.blur.Blur
-import net.minecraft.client.gl.Framebuffer
 import org.joml.Vector2f
+import org.lwjgl.opengl.GL33C.*
 import kotlin.properties.Delegates
 
 /**
@@ -42,7 +41,7 @@ object BlurKawase : Blur {
     private val texelSize = Vector2f()
 
     override fun switchStrength(strength: Int) {
-        this.strength = strength
+        this.strength = strength.coerceAtLeast(1)
     }
 
     /**
@@ -52,18 +51,20 @@ object BlurKawase : Blur {
      * @param size The size of the blur.
      * @param alpha Whether to use alpha blending.
      */
-    private fun renderToFBO(targetFBO: Framebuffer, sourceTex: Int, size: Float, alpha: Boolean) {
+    private fun renderToFBO(targetFBO: WrappedFramebuffer, sourceTex: Int, size: Float, alpha: Boolean) {
         targetFBO.clear()
         targetFBO.beginWrite(true)
         ShaderKawase.bind()
-        RenderSystem.activeTexture(GlConst.GL_TEXTURE0)
-        RenderSystem.bindTexture(sourceTex)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, sourceTex)
         ShaderKawase.setUniforms(texelSize.set(1f / targetFBO.textureWidth, 1f / targetFBO.textureHeight), size, alpha)
         Shader.drawFullScreen()
         ShaderKawase.unbind()
     }
 
-    override fun render(sourceTex: Int, alpha: Boolean) {
+    override fun render(sourceTex: Int, alpha: Boolean) = Render.isolated {
+        Render.prepareFullscreen()
+        glDisable(GL_BLEND)
         // Initial iteration
         renderToFBO(if (strength == 1) out else fbos[0], sourceTex, if (strength > 1) .5f else .25f, alpha)
         // Rest of the iterations

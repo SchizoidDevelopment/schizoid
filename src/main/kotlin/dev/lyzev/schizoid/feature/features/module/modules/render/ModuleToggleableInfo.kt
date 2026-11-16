@@ -11,7 +11,7 @@ import dev.lyzev.api.settings.Setting.Companion.neq
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleableRenderImGuiContent
 import imgui.ImGui.text
-import net.minecraft.util.math.MathHelper
+import net.minecraft.util.Mth
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -39,13 +39,13 @@ object ModuleToggleableInfo :
 
     override fun renderImGuiContent() {
         if (fps)
-            text("%d fps".format(mc.currentFps))
+            text("%d fps".format(mc.fps))
         if (username)
-            text("Username: ${mc.session.username}")
+            text("Username: ${mc.user.name}")
         if (yaw)
-            text("Yaw: %.1f°".format(MathHelper.wrapDegrees(mc.player?.yaw!!)))
+            mc.player?.let { text("Yaw: %.1f°".format(Mth.wrapDegrees(it.yRot))) }
         if (pitch)
-            text("Pitch: %.1f°".format(mc.player?.pitch))
+            mc.player?.let { text("Pitch: %.1f°".format(it.xRot)) }
         if (coords)
             text("XYZ: %.1f / %.1f / %.1f".format(mc.player?.x, mc.player?.y, mc.player?.z))
         if (date)

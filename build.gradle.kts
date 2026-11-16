@@ -6,13 +6,13 @@
 import com.google.gson.JsonParser
 import groovy.util.Node
 import groovy.xml.XmlParser
-import me.lyzev.network.http.HttpClient
-import me.lyzev.network.http.HttpMethod
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-import java.io.ByteArrayOutputStream
+import java.net.URI
 import java.util.*
 
 plugins {
+    idea
     alias(libs.plugins.kotlin)
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.dokka)
@@ -28,12 +28,9 @@ idea {
 
 base { archivesName.set(project.extra["archives_base_name"] as String) }
 
-val stdout = ByteArrayOutputStream()
-exec {
+val lastCommitHash = providers.exec {
     commandLine("git", "rev-parse", "--short", "HEAD")
-    standardOutput = stdout
-}
-val lastCommitHash = stdout.toByteArray().decodeToString().trim()
+}.standardOutput.asText.get().trim()
 
 val ci = System.getenv("CI")?.toBooleanStrictOrNull() ?: false
 
@@ -52,18 +49,12 @@ repositories {
 configurations {
     create("shadowDependencies")
     create("minecraftDependencies")
+    create("imguiBindingForShading") { isTransitive = false }
 }
 
 dependencies {
     minecraft(libs.minecraft)
-    mappings(
-        variantOf(libs.yarn.mappings) {
-            classifier("v2")
-        }
-    )
-    add("minecraftDependencies", libs.yarn.mappings)
-
-    modImplementation(libs.bundles.fabric)
+    implementation(libs.bundles.fabric)
     add("minecraftDependencies", libs.bundles.fabric)
 
     // Libraries (required)
@@ -72,7 +63,12 @@ dependencies {
     add("shadowDependencies", libs.lyzev.network)
 
     add("shadowDependencies", libs.reflections)
-    add("shadowDependencies", libs.bundles.imgui)
+    // Use the patched ImFontAtlas class and exactly one matching Windows x64 native.
+    implementation(libs.imgui.binding)
+    add("imguiBindingForShading", libs.imgui.binding)
+    add("shadowDependencies", "io.github.spair:imgui-java-lwjgl3:${libs.versions.imgui.get()}") {
+        exclude(group = "io.github.spair", module = "imgui-java-binding")
+    }
     add("shadowDependencies", libs.fuzzywuzzy)
     add("shadowDependencies", libs.mpi)
     add("shadowDependencies", libs.discordipc)
@@ -81,7 +77,18 @@ dependencies {
     add("shadowDependencies", libs.kotlin.csv)
 
     // Mods (optional)
-    modRuntimeOnly(libs.bundles.modrinth)
+    // Load a user's existing pack read-only into the isolated Loom run directory.
+    val compatModsDir = providers.gradleProperty("compatModsDir").orNull
+    if (compatModsDir != null) {
+        require(file(compatModsDir).isDirectory) { "compatModsDir is not a directory: $compatModsDir" }
+        runtimeOnly(fileTree(compatModsDir) {
+            include("*.jar")
+            // These are already provided by the version catalog, not shaded into our jar.
+            exclude("fabric-api-*.jar", "fabric-language-kotlin-*.jar")
+        })
+    } else if (providers.gradleProperty("withOptionalMods").orNull == "true") {
+        runtimeOnly(libs.bundles.modrinth)
+    }
 
     configurations.getByName("shadowDependencies").dependencies.forEach { dependency ->
         implementation(dependency)
@@ -124,22 +131,15 @@ tasks.register("updateFabric") {
     group = project.extra["archives_base_name"] as String
     description = "Update Fabric Library Versions"
     doLast {
-        val gameVersion = HttpClient.request(HttpMethod.GET, "https://meta.fabricmc.net/v2/versions/game").let { data ->
-            JsonParser.parseString(data.toString()).asJsonArray.first { version -> version.asJsonObject["stable"].asBoolean }!!.asJsonObject["version"].asString
-        }
-
-        val mappingsVersion =
-            HttpClient.request(HttpMethod.GET, "https://meta.fabricmc.net/v2/versions/yarn").let { data ->
-                JsonParser.parseString(data.toString()).asJsonArray.first { version -> version.asJsonObject["gameVersion"].asString == gameVersion }!!.asJsonObject["version"].asString
-            }
+        val gameVersion = libs.versions.minecraft.get()
 
         val loaderVersion =
-            HttpClient.request(HttpMethod.GET, "https://meta.fabricmc.net/v2/versions/loader").let { data ->
+            requestText("https://meta.fabricmc.net/v2/versions/loader").let { data ->
                 JsonParser.parseString(data.toString()).asJsonArray.first { version -> version.asJsonObject["stable"].asBoolean }!!.asJsonObject["version"].asString
             }
 
-        val apiVersion = HttpClient.request(
-            HttpMethod.GET, "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml"
+        val apiVersion = requestText(
+            "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml"
         ).let { data ->
             ((XmlParser().parseText(data.toString()).children()
                 .first { node -> (node as Node).name() == "versioning" } as Node).children()
@@ -147,25 +147,25 @@ tasks.register("updateFabric") {
                 .map { node -> (node as Node).text() }.last { version -> version.endsWith(gameVersion) }
         }
 
-        val klVersion = HttpClient.request(
-            HttpMethod.GET, "https://maven.fabricmc.net/net/fabricmc/fabric-language-kotlin/maven-metadata.xml"
+        val klVersion = requestText(
+            "https://maven.fabricmc.net/net/fabricmc/fabric-language-kotlin/maven-metadata.xml"
         ).let { data ->
             ((XmlParser().parseText(data.toString()).children()
                 .first { node -> (node as Node).name() == "versioning" } as Node).children()
                 .first { node -> (node as Node).name() == "latest" } as Node).text()
         }
 
-        val loomVersion = HttpClient.request(
-            HttpMethod.GET, "https://maven.fabricmc.net/fabric-loom/fabric-loom.gradle.plugin/maven-metadata.xml"
+        val loomVersion = requestText(
+            "https://maven.fabricmc.net/net/fabricmc/fabric-loom/net.fabricmc.fabric-loom.gradle.plugin/maven-metadata.xml"
         ).let { data ->
             ((XmlParser().parseText(data.toString()).children()
                 .first { node -> (node as Node).name() == "versioning" } as Node).children()
-                .first { node -> (node as Node).name() == "latest" } as Node).text()
+                .first { node -> (node as Node).name() == "versions" } as Node).children()
+                .map { node -> (node as Node).text() }.last { version -> version.matches("\\d+\\.\\d+\\.\\d+".toRegex()) }
         }
 
         val versions = mapOf(
             "minecraft" to gameVersion,
-            "yarn_mappings" to mappingsVersion,
             "fabric_loader" to loaderVersion,
             "fabric_api" to apiVersion,
             "fabric_kl" to klVersion,
@@ -184,14 +184,14 @@ tasks.register("updateKotlin") {
     group = project.extra["archives_base_name"] as String
     description = "Update Kotlin and Dokka Versions"
     doLast {
-        val kotlinVersion = HttpClient.request(
-            HttpMethod.GET, "https://api.github.com/repos/JetBrains/kotlin/releases/latest"
+        val kotlinVersion = requestText(
+            "https://api.github.com/repos/JetBrains/kotlin/releases/latest"
         ).let { data ->
             JsonParser.parseString(data.toString()).asJsonObject["tag_name"].asString.removePrefix("v")
         }
 
-        val dokkaVersion = HttpClient.request(
-            HttpMethod.GET, "https://api.github.com/repos/Kotlin/dokka/releases/latest"
+        val dokkaVersion = requestText(
+            "https://api.github.com/repos/Kotlin/dokka/releases/latest"
         ).let { data ->
             JsonParser.parseString(data.toString()).asJsonObject["tag_name"].asString.removePrefix("v")
         }
@@ -209,6 +209,12 @@ tasks.register("updateKotlin") {
     }
 }
 
+fun requestText(url: String): String = URI.create(url).toURL().openConnection().run {
+    connectTimeout = 30_000
+    readTimeout = 30_000
+    getInputStream().bufferedReader().use { it.readText() }
+}
+
 fun updateTomlVersions(tomlContent: String, versions: Map<String, String>): String {
     val lines = tomlContent.lines()
     val updatedLines = lines.map { line ->
@@ -218,6 +224,8 @@ fun updateTomlVersions(tomlContent: String, versions: Map<String, String>): Stri
     }
     return updatedLines.joinToString("\n")
 }
+
+val dependencyConfigurations = configurations
 
 tasks {
     val javaVersion = JavaVersion.toVersion((project.extra["java_version"] as String).toInt())
@@ -229,9 +237,12 @@ tasks {
         options.release.set(javaVersion.toString().toInt())
     }
 
-    withType<KotlinCompile> { kotlinOptions { jvmTarget = javaVersion.toString() } }
+    withType<KotlinCompile> { compilerOptions { jvmTarget.set(JvmTarget.fromTarget(javaVersion.toString())) } }
 
-    jar { from("LICENSE") { rename { "${it}_${base.archivesName.get()}" } } }
+    jar {
+        archiveClassifier.set("plain")
+        from("LICENSE") { rename { "${it}_${base.archivesName.get()}" } }
+    }
 
     processResources {
         dependsOn("generateProperties")
@@ -254,6 +265,18 @@ tasks {
 
     runClient {
         dependsOn("generateProperties")
+        jvmArgs("-Xmx2G", "--enable-native-access=ALL-UNNAMED")
+        // Dev affordance: hand the client -D flags without touching the launcher, e.g.
+        //   ./gradlew runClient -PgameProp=schizoid.spatial.autotest=rear
+        // (the spatial workspace reads schizoid.spatial.autotest for screenshot runs).
+        (project.findProperty("gameProp") as String?)?.split(',')?.filter { it.isNotBlank() }?.forEach { entry ->
+            jvmArgs("-D${entry.trim()}")
+        }
+        // Join a world on launch so an unattended run needs no clicks. Passed as a real program
+        // argument list, not through --args, so a save name with spaces survives.
+        (project.findProperty("quickPlaySave") as String?)?.let { save ->
+            args("--quickPlaySingleplayer", save)
+        }
     }
 
     // Run `./gradlew wrapper --gradle-version <newVersion>` or `gradle wrapper --gradle-version <newVersion>` to update gradle scripts
@@ -270,34 +293,34 @@ tasks {
     }
 
     shadowJar {
-        archiveClassifier.set("shadow")
+        archiveClassifier.set("")
+        from("LICENSE") { rename { "${it}_${base.archivesName.get()}" } }
 
         configurations = listOf(project.configurations.getByName("shadowDependencies"))
+        from({ project.configurations.getByName("imguiBindingForShading").map { zipTree(it) } }) {
+            exclude("imgui/ImFontAtlas.class", "META-INF/MANIFEST.MF")
+        }
+        from("vendor/imgui-patch/licenses") { into("META-INF/licenses/imgui-patch") }
+        doFirst {
+            check(file("src/main/resources/io/imgui/java/native-bin/imgui-java64.dll").isFile) {
+                "Patched Windows x64 ImGui DLL is missing"
+            }
+        }
 
         dependencies {
-            val versionUrl = HttpClient.request(HttpMethod.GET, "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json").let { data ->
-                JsonParser.parseString(data.toString()).asJsonObject["versions"].asJsonArray
-                    .first { version -> version.asJsonObject["id"].asString == libs.versions.minecraft.get() }!!.asJsonObject["url"].asString
-            }
-            val minecraftDependencies = HttpClient.request(HttpMethod.GET, versionUrl).let { data ->
-                JsonParser.parseString(data.toString()).asJsonObject["libraries"].asJsonArray
-                    .filter { dep -> "rules" !in dep.asJsonObject.keySet() }
-                    .map { dep -> dep.asJsonObject["name"].asString.split(":").dropLast(1).joinToString(":") }
-            }
-            val runtimeArtifacts = project.configurations.getByName("minecraftDependencies").resolvedConfiguration.resolvedArtifacts
-                .map { "${it.moduleVersion.id.group}:${it.moduleVersion.id.name}" } + minecraftDependencies
-            project.configurations.getByName("shadowDependencies").resolvedConfiguration.resolvedArtifacts
-                .filter { "${it.moduleVersion.id.group}:${it.moduleVersion.id.name}" !in runtimeArtifacts }
-                .filter { !"${it.moduleVersion.id.group}:${it.moduleVersion.id.name}".startsWith("org.ow2.asm:") } // mixin
-                .forEach {
-                    include(dependency("${it.moduleVersion.id.group}:${it.moduleVersion.id.name}:${it.moduleVersion.id.version}"))
+            // Loom already knows the game's libraries. Don't fetch Mojang's manifest
+            // again or bundle old Kotlin/LWJGL/ASM copies from transitive dependencies.
+            listOf("minecraftDependencies", "minecraftRuntimeLibraries", "loaderLibraries")
+                .flatMap { name ->
+                    dependencyConfigurations.getByName(name).resolvedConfiguration.resolvedArtifacts
+                        .map { "${it.moduleVersion.id.group}:${it.moduleVersion.id.name}" }
                 }
+                .toSet()
+                .forEach { coordinate -> exclude(dependency("$coordinate:.*")) }
         }
     }
 
-    remapJar {
-        inputFile = shadowJar.get().archiveFile
-    }
+    assemble { dependsOn(shadowJar) }
 
     dokkaHtml.configure {
 		moduleName.set(project.extra["archives_base_name"] as String)
@@ -309,4 +332,3 @@ tasks {
 		}
 	}
 }
-

@@ -9,6 +9,10 @@ import dev.lyzev.api.setting.settings.OptionEnum
 import dev.lyzev.api.setting.settings.option
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleRunnable
+import net.minecraft.nbt.NbtOps
+import net.minecraft.resources.RegistryOps
+import net.minecraft.world.InteractionHand
+import net.minecraft.world.item.ItemStack
 
 object ModuleRunnableCopyNBT :
     ModuleRunnable(
@@ -21,16 +25,20 @@ object ModuleRunnableCopyNBT :
 
     override fun invoke(): String? {
         if (!isIngame) return "You are not in a game."
-        val itemInHand = mc.player?.getStackInHand(hand.type)
-        if (itemInHand == null || itemInHand.components == null || itemInHand.components!!.isEmpty)
+        val itemInHand = mc.player?.getItemInHand(hand.type)
+        val level = mc.level ?: return "You are not in a game."
+        if (itemInHand == null || itemInHand.isEmpty || itemInHand.components.isEmpty)
             return "There is no NBT data to copy."
-        copy(itemInHand.encode(mc.world?.registryManager).asString())
+        val ops = RegistryOps.create(NbtOps.INSTANCE, level.registryAccess())
+        val nbt = runCatching { ItemStack.CODEC.encodeStart(ops, itemInHand).getOrThrow() }
+            .getOrElse { return "Could not encode the item data." }
+        copy(nbt.toString())
         return null
     }
 
-    enum class Hand(val type: net.minecraft.util.Hand) : OptionEnum {
-        MAIN_HAND(net.minecraft.util.Hand.MAIN_HAND),
-        OFF_HAND(net.minecraft.util.Hand.OFF_HAND);
+    enum class Hand(val type: InteractionHand) : OptionEnum {
+        MAIN_HAND(InteractionHand.MAIN_HAND),
+        OFF_HAND(InteractionHand.OFF_HAND);
 
         override val key: String
             get() = type.name

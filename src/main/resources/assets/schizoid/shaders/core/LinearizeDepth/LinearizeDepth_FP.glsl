@@ -5,8 +5,6 @@
 
 #version 330
 
-#include "Depth.glsl"
-
 in vec2 uv;
 out vec4 color;
 
@@ -18,8 +16,8 @@ void main() {
     // Read in depth value from depth texture
     float depth = texture(Tex0, uv).x;
 
-    // Convert depth value to distance
-    float distance = linearizeDepth(depth, Near, Far) / Far;
+    // Minecraft 26.2 uses reversed-Z: 1 is the near plane, 0 is the far plane.
+    float distance = (Near * Far / (Near + depth * (Far - Near))) / Far;
 
     color = vec4(vec3(distance), 1.0);
 }

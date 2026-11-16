@@ -12,8 +12,8 @@ import dev.lyzev.api.setting.settings.OptionEnum
 import dev.lyzev.api.setting.settings.option
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.entity.TntEntity
-import net.minecraft.text.Text
+import net.minecraft.world.entity.item.PrimedTnt
+import net.minecraft.network.chat.Component
 
 /**
  * This object represents a module that provides a timer for TNT entities in the game.
@@ -42,13 +42,13 @@ object ModuleToggleableTNTTimer :
          * It sets up an event listener that updates the name of each TNT entity in the game world to display the time left until it explodes, every time the player entity ticks.
          */
         on<EventClientPlayerEntityTick> {
-            mc.world!!.entities.filterIsInstance<TntEntity>().forEach { tnt ->
+            mc.level?.entitiesForRendering()?.filterIsInstance<PrimedTnt>()?.forEach { tnt ->
                 val ticks = tnt.fuse
-                val percent = ticks * 100f / TntEntity.DEFAULT_FUSE
+                val percent = ticks * 100f / PrimedTnt.DEFAULT_FUSE_TIME
                 val color = if (percent <= 33) "§c" else if (percent <= 66) "§e" else "§a"
                 val formattedTicks = if (unit == Units.SECONDS) "%.1f".format(ticks / 20f) else ticks.toString()
                 // Set the custom name of the TNT entity to display the time left until it explodes.
-                tnt.customName = Text.of("$color$formattedTicks ${unit.short}")
+                tnt.customName = Component.literal("$color$formattedTicks ${unit.short}")
                 tnt.isCustomNameVisible = true
             }
         }

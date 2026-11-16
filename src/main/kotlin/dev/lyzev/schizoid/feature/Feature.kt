@@ -15,8 +15,8 @@ import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.features.gui.guis.ImGuiScreenFeature
 import imgui.ImGui.*
 import imgui.flag.ImGuiCond
-import net.minecraft.client.MinecraftClient
-import net.minecraft.text.Text
+import net.minecraft.client.Minecraft
+import net.minecraft.network.chat.Component
 
 /**
  * Represents a feature.
@@ -82,7 +82,7 @@ interface IFeature : ImGuiRenderable {
      *
      * @param message The message to send.
      */
-    fun sendChatMessage(message: Text) = FeatureManager.sendChatMessage(message)
+    fun sendChatMessage(message: Component) = FeatureManager.sendChatMessage(message)
 
     /**
      * Called when the keybind is pressed.
@@ -90,32 +90,32 @@ interface IFeature : ImGuiRenderable {
     fun keybindReleased()
 
     fun copy(text: String) {
-        mc.keyboard.clipboard = text
+        mc.keyboardHandler.clipboard = text
     }
 
     /**
      * The Minecraft client instance.
      */
-    val mc: MinecraftClient
+    val mc: Minecraft
         get() = Schizoid.mc
 
     /**
      * Whether the player is in a game.
      */
     val isIngame: Boolean
-        get() = mc.world != null
+        get() = mc.level != null
 
     /**
      * Whether the player is in a multiplayer game.
      */
     val isMultiplayer: Boolean
-        get() = isIngame && !mc.isInSingleplayer && !mc.currentServerEntry!!.isRealm
+        get() = isIngame && !mc.hasSingleplayerServer() && mc.currentServer?.isRealm == false
 
     /**
      * Whether the player is in a singleplayer game.
      */
     val isSingleplayer: Boolean
-        get() = isIngame && mc.isInSingleplayer
+        get() = isIngame && mc.hasSingleplayerServer()
 
     /**
      * Represents a category of features.
@@ -133,21 +133,25 @@ interface IFeature : ImGuiRenderable {
             OPEN_SANS_BOLD.begin()
             if (ImGuiScreenFeature.search.result != null && ImGuiScreenFeature.search.result!!.category == this)
                 setNextWindowFocus()
-            val width = (Schizoid.mc.window.framebufferWidth - 620) / 3f
-            val height = (Schizoid.mc.window.framebufferHeight - 620) / 3f
+            val width = (Schizoid.mc.window.width - 620) / 3f
+            val height = (Schizoid.mc.window.height - 620) / 3f
             setNextWindowSize(width, height, ImGuiCond.FirstUseEver)
             setNextWindowPos(
                 300 + (ordinal % 3) * (width + 10),
                 300 + (ordinal / 3) * (height + 10),
                 ImGuiCond.FirstUseEver
             )
-            if (begin("\"$name\"")) {
-                OPEN_SANS_REGULAR.begin()
-                FeatureManager[this].forEach(IFeature::render)
-                OPEN_SANS_REGULAR.end()
-            }
+            if (begin("\"$name\"")) renderContents()
             OPEN_SANS_BOLD.end()
             end()
         }
+
+        /** Original controls reused by desktop and world-space canvases. */
+        fun renderContents() {
+            OPEN_SANS_REGULAR.begin()
+            FeatureManager[this].forEach(IFeature::render)
+            OPEN_SANS_REGULAR.end()
+        }
+
     }
 }

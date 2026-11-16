@@ -8,7 +8,7 @@ package dev.lyzev.api.opengl.shader.blur
 import dev.lyzev.api.opengl.WrappedFramebuffer
 import dev.lyzev.api.opengl.shader.blur.blurs.*
 import dev.lyzev.api.setting.settings.OptionEnum
-import net.minecraft.client.gl.Framebuffer
+import com.mojang.blaze3d.pipeline.RenderTarget
 
 /**
  * Enum class representing different types of blurs.
@@ -26,7 +26,7 @@ enum class Blurs(override val key: String, val blur: Blur) : OptionEnum, Blur {
 
     override fun switchStrength(strength: Int) = blur.switchStrength(strength)
 
-    override fun render(sourceFBO: Framebuffer, alpha: Boolean) = blur.render(sourceFBO, alpha)
+    override fun render(sourceFBO: RenderTarget, alpha: Boolean) = blur.render(sourceFBO, alpha)
 
     override fun render(sourceTex: Int, alpha: Boolean) = blur.render(sourceTex, alpha)
 

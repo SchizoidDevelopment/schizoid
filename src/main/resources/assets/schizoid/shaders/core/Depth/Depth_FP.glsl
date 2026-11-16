@@ -5,7 +5,7 @@
 
 #version 330
 
-#include "Depth.glsl"
+#include "depth.glsl"
 
 in vec2 uv;
 out vec4 color;

@@ -9,7 +9,7 @@ import dev.lyzev.api.setting.SettingClient
 import dev.lyzev.schizoid.feature.IFeature
 import imgui.ImGui.*
 import kotlinx.serialization.json.*
-import net.minecraft.util.math.MathHelper
+import net.minecraft.util.Mth
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty
 
@@ -54,14 +54,14 @@ class SettingClientSlider<T : Number>(
                     value = if (allowOutOfBounds)
                         i[0] as T
                     else
-                        MathHelper.clamp(i[0], minValue.toInt(), maxValue.toInt()) as T
+                        Mth.clamp(i[0], minValue.toInt(), maxValue.toInt()) as T
                 }
             }
             if (isItemDeactivatedAfterEdit() && onlyUpdateOnRelease) {
                 value = if (allowOutOfBounds)
                     i[0] as T
                 else
-                    MathHelper.clamp(i[0], minValue.toInt(), maxValue.toInt()) as T
+                    Mth.clamp(i[0], minValue.toInt(), maxValue.toInt()) as T
             }
         } else if (value is Float) {
             setNextItemWidth(getColumnWidth())
@@ -77,14 +77,14 @@ class SettingClientSlider<T : Number>(
                     value = if (allowOutOfBounds)
                         f[0] as T
                     else
-                        MathHelper.clamp(f[0], minValue.toFloat(), maxValue.toFloat()) as T
+                        Mth.clamp(f[0], minValue.toFloat(), maxValue.toFloat()) as T
                 }
             }
             if (isItemDeactivatedAfterEdit() && onlyUpdateOnRelease) {
                 value = if (allowOutOfBounds)
                     f[0] as T
                 else
-                    MathHelper.clamp(f[0], minValue.toFloat(), maxValue.toFloat()) as T
+                    Mth.clamp(f[0], minValue.toFloat(), maxValue.toFloat()) as T
             }
         }
         if (isItemHovered()) setTooltip((if (allowOutOfBounds) "Out of bounds values are allowed, use with caution." else "Range: $minValue ${unit ?: ""} - $maxValue ${unit ?: ""}") + "\nPress CTRL + click to set a specific value.")
@@ -94,9 +94,9 @@ class SettingClientSlider<T : Number>(
         if (allowOutOfBounds)
             super.setValue(ref, prop, value)
         else if (this.value is Int)
-            super.setValue(ref, prop, MathHelper.clamp(value.toInt(), minValue.toInt(), maxValue.toInt()) as T)
+            super.setValue(ref, prop, Mth.clamp(value.toInt(), minValue.toInt(), maxValue.toInt()) as T)
         else if (this.value is Float)
-            super.setValue(ref, prop, MathHelper.clamp(value.toFloat(), minValue.toFloat(), maxValue.toFloat()) as T)
+            super.setValue(ref, prop, Mth.clamp(value.toFloat(), minValue.toFloat(), maxValue.toFloat()) as T)
         if (this.value is Int)
             i[0] = this.value as Int
         else if (this.value is Float)

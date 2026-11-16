@@ -11,15 +11,4 @@ pluginManagement {
     }
 }
 
-buildscript {
-    repositories {
-        mavenCentral()
-        maven("https://jitpack.io")
-    }
-
-    dependencies {
-        classpath("com.github.Lyzev:Network4K:1.3")
-    }
-}
-
 rootProject.name = "Schizoid"

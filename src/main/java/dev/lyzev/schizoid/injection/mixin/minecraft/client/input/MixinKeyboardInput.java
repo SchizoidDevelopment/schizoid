@@ -9,8 +9,9 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.lyzev.api.events.EventIsMovementKeyPressed;
 import dev.lyzev.api.events.EventKeyboardInputTick;
-import net.minecraft.client.input.KeyboardInput;
-import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.player.KeyboardInput;
+import net.minecraft.client.KeyMapping;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -31,14 +32,14 @@ public class MixinKeyboardInput {
      * @param instance The key binding that was pressed.
      * @return The return value of the event.
      */
-    @WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/KeyBinding;isPressed()Z"))
-    private boolean onTick(KeyBinding instance, Operation<Boolean> original) {
-        EventIsMovementKeyPressed event = new EventIsMovementKeyPressed(instance);
+    @WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/KeyMapping;isDown()Z"))
+    private boolean onTick(KeyMapping instance, Operation<Boolean> original) {
+        EventIsMovementKeyPressed event = new EventIsMovementKeyPressed(instance, original.call(instance));
         event.fire();
         return event.isPressed();
     }
 
-    @Inject(method = "tick", at = @At(value = "FIELD", target = "Lnet/minecraft/client/input/KeyboardInput;sneaking:Z", shift = At.Shift.AFTER, ordinal = 0))
+    @Inject(method = "tick", at = @At(value = "FIELD", target = "Lnet/minecraft/client/player/KeyboardInput;keyPresses:Lnet/minecraft/world/entity/player/Input;", opcode = Opcodes.PUTFIELD, shift = At.Shift.AFTER))
     private void onTick(CallbackInfo ci) {
         EventKeyboardInputTick event = new EventKeyboardInputTick((KeyboardInput) (Object) this);
         event.fire();

@@ -20,10 +20,10 @@ uniform vec3 Gamma;
 uniform vec3 Gain;
 uniform vec3 Offset;
 
-#include "Luminance.glsl"
-#include "Color.glsl"
-#include "Temperature.glsl"
-#include "FilmicTonemap.glsl"
+#include "luminance.glsl"
+#include "color.glsl"
+#include "temperature.glsl"
+#include "filmictonemap.glsl"
 
 void main() {
     color.rgb = texture(Tex0, uv).rgb;

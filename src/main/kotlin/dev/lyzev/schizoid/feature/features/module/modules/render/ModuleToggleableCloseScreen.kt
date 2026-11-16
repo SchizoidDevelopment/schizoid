@@ -29,9 +29,9 @@ object ModuleToggleableCloseScreen :
 
     override fun renderImGuiContent() {
         if (button("Close Screen", 200f, OPEN_SANS_REGULAR.size + getStyle().framePaddingY * 2))
-            mc.currentScreen?.close()
+            mc.gui.screen()?.onClose()
     }
 
     override val shouldHandleEvents: Boolean
-        get() = super.shouldHandleEvents && mc.currentScreen != null && (showInImGuiScreen || mc.currentScreen !is ImGuiScreen)
+        get() = super.shouldHandleEvents && mc.gui.screen() != null && (showInImGuiScreen || mc.gui.screen() !is ImGuiScreen)
 }

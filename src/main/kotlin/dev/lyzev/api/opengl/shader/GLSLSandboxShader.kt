@@ -5,8 +5,7 @@
 
 package dev.lyzev.api.opengl.shader
 
-import com.mojang.blaze3d.systems.RenderSystem
-import net.minecraft.client.MinecraftClient
+import dev.lyzev.api.opengl.Render
 import org.joml.Vector2f
 
 /**
@@ -29,21 +28,18 @@ class GLSLSandboxShader(shader: String) : ShaderVertexFragment(shader) {
      * Method to draw the shader.
      * Disables culling, enables blending, binds the shader, sets the uniforms, draws fullscreen, unbinds the shader, and enables culling.
      */
-    fun draw(setUniforms: Shader.() -> Unit = { }) {
-        RenderSystem.disableCull()
-        RenderSystem.enableBlend()
-        RenderSystem.defaultBlendFunc()
+    fun draw(setUniforms: Shader.() -> Unit = { }) = Render.isolated {
+        Render.prepareFullscreen()
         bind()
         // Set the time since the shader was initialized.
         this["time"] = (System.currentTimeMillis() - initTime) / 1000f
         // Set the resolution to the current framebuffer's texture width and height.
         this["resolution"] = resolution.set(
-            MinecraftClient.getInstance().framebuffer.textureWidth.toFloat(),
-            MinecraftClient.getInstance().framebuffer.textureHeight.toFloat()
+            Render.mainFramebuffer.width.toFloat(),
+            Render.mainFramebuffer.height.toFloat()
         )
         setUniforms()
         drawFullScreen()
         unbind()
-        RenderSystem.enableCull()
     }
 }

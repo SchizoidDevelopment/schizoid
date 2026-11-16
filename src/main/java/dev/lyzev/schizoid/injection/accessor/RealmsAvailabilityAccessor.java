@@ -5,9 +5,8 @@
 
 package dev.lyzev.schizoid.injection.accessor;
 
-import net.minecraft.client.realms.RealmsAvailability;
+import com.mojang.realmsclient.RealmsAvailability;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
 import java.util.concurrent.CompletableFuture;
@@ -22,8 +21,8 @@ public interface RealmsAvailabilityAccessor {
      *
      * @param availabilityInfo Realms availability info completable future
      */
-    @Accessor
-    @Mutable
-    static void setCurrentFuture(CompletableFuture<RealmsAvailability.Info> availabilityInfo) {
+    @Accessor("future")
+    static void setCurrentFuture(CompletableFuture<RealmsAvailability.Result> availabilityInfo) {
+        throw new UnsupportedOperationException("Mixin accessor was not applied");
     }
 }

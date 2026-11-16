@@ -11,7 +11,7 @@ import dev.lyzev.schizoid.feature.features.module.ModuleRunnable
 object ModuleRunnableClearChat : ModuleRunnable("Clear Chat", "Clears the chat.", category = IFeature.Category.UTIL) {
 
     override fun invoke(): String? {
-        mc.inGameHud.chatHud.clear(false)
+        mc.gui.hud.chat.clearMessages(false)
         return null
     }
 }

@@ -6,8 +6,9 @@
 package dev.lyzev.api.opengl.shader.blur
 
 import dev.lyzev.api.opengl.WrappedFramebuffer
-import dev.lyzev.schizoid.Schizoid.mc
-import net.minecraft.client.gl.Framebuffer
+import dev.lyzev.api.opengl.Render
+import dev.lyzev.api.opengl.colorAttachment
+import com.mojang.blaze3d.pipeline.RenderTarget
 
 interface Blur {
 
@@ -22,7 +23,7 @@ interface Blur {
      * @param sourceFBO The framebuffer to render from.
      * @param alpha Whether to use alpha blending.
      */
-    fun render(sourceFBO: Framebuffer = mc.framebuffer, alpha: Boolean = false) =
+    fun render(sourceFBO: RenderTarget = Render.mainFramebuffer, alpha: Boolean = false) =
         render(sourceFBO.colorAttachment, alpha)
 
     fun render(sourceTex: Int, alpha: Boolean = false)

@@ -6,7 +6,7 @@
 package dev.lyzev.schizoid.injection.mixin.minecraft.client.render;
 
 import dev.lyzev.api.events.EventClipToSpace;
-import net.minecraft.client.render.Camera;
+import net.minecraft.client.Camera;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -27,9 +27,9 @@ public class MixinCamera {
      * @param desiredCameraDistance The desired camera distance that was calculated.
      * @param cir                   The callback information, which includes the return value of the desired camera distance calculation.
      */
-    @Inject(method = "clipToSpace", at = @At("RETURN"), cancellable = true)
+    @Inject(method = "getMaxZoom", at = @At("RETURN"), cancellable = true)
     private void onClipToSpace(float desiredCameraDistance, CallbackInfoReturnable<Float> cir) {
-        EventClipToSpace event = new EventClipToSpace(desiredCameraDistance);
+        EventClipToSpace event = new EventClipToSpace(cir.getReturnValue());
         event.fire();
         cir.setReturnValue(event.getDesiredCameraDistance());
     }

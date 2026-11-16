@@ -15,12 +15,11 @@ import dev.lyzev.api.setting.settings.switch
 import dev.lyzev.api.settings.Setting.Companion.neq
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.client.option.KeyBinding
-import net.minecraft.entity.Entity
-import net.minecraft.entity.LivingEntity
-import net.minecraft.entity.projectile.ProjectileUtil
-import net.minecraft.registry.Registries
-import net.minecraft.util.math.MathHelper
+import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.projectile.ProjectileUtil
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.util.Mth
 
 object ModuleToggleableTriggerBot : ModuleToggleable(
     "Trigger Bot", "Automatically attacks entities in the player's crosshair.", category = IFeature.Category.COMBAT
@@ -31,7 +30,7 @@ object ModuleToggleableTriggerBot : ModuleToggleable(
     val targets by multiOption(
         "Targets",
         "The targets to aim at.",
-        Registries.ENTITY_TYPE.map { it.name.string to (it.name.string == "Player") }.sortedBy { it.first }.toSet()
+        BuiltInRegistries.ENTITY_TYPE.map { it.description.string to (it.description.string == "Player") }.sortedBy { it.first }.toSet()
     )
     val clicker = Clicker(this)
     val miss by switch("Miss", "Hits in the air to simulate a miss.", true)
@@ -56,19 +55,19 @@ object ModuleToggleableTriggerBot : ModuleToggleable(
     )
 
     private fun click(amount: Int) {
-        mc.options.attackKey.timesPressed += amount
+        mc.options.keyAttack.clickCount += amount
     }
 
     override val shouldHandleEvents
-        get() = isEnabled && mc.player != null && mc.crosshairTarget != null
+        get() = isEnabled && mc.player != null && mc.gui.screen() == null && mc.hitResult != null
 
     init {
         // Attack the entity in the player's crosshair.
         on<EventUpdateCrosshairTargetTick> {
-            if (mc.targetedEntity != null && targets.any { it.second && it.first == mc.targetedEntity!!.type.name.string }) {
+            if (mc.crosshairPickEntity != null && targets.any { it.second && it.first == mc.crosshairPickEntity!!.type.description.string }) {
                 lastHit = System.currentTimeMillis()
                 val click =
-                    clicker.tick(mc.targetedEntity is LivingEntity && (mc.targetedEntity as LivingEntity).hurtTime == 0)
+                    clicker.tick(mc.crosshairPickEntity is LivingEntity && (mc.crosshairPickEntity as LivingEntity).hurtTime == 0)
                 if (click > 0) {
                     click(click)
                 }
@@ -80,20 +79,21 @@ object ModuleToggleableTriggerBot : ModuleToggleable(
                         click(click)
                     }
                 } else if (mc.cameraEntity != null) {
-                    val reach = mc.player!!.entityInteractionRange + reachExtension
-                    val camVec = mc.cameraEntity!!.getCameraPosVec(1f)
-                    val lookVec = mc.cameraEntity!!.getRotationVec(1f)
-                    val hitVec = lookVec.multiply(reach).add(camVec)
-                    val box = mc.cameraEntity!!.boundingBox.stretch(lookVec.multiply(reach)).expand(1.0, 1.0, 1.0)
-                    val entityHitResult = ProjectileUtil.raycast(
-                        mc.cameraEntity,
+                    val camera = mc.cameraEntity ?: return@on
+                    val reach = mc.player!!.attackReach() + reachExtension
+                    val camVec = camera.getEyePosition(1f)
+                    val lookVec = camera.getViewVector(1f)
+                    val hitVec = lookVec.scale(reach).add(camVec)
+                    val box = camera.boundingBox.expandTowards(lookVec.scale(reach)).inflate(1.0, 1.0, 1.0)
+                    val entityHitResult = ProjectileUtil.getEntityHitResult(
+                        camera,
                         camVec,
                         hitVec,
                         box,
-                        { entity: Entity -> !entity.isSpectator && entity.canHit() },
-                        MathHelper.square(reach)
+                        { entity: Entity -> !entity.isSpectator && entity.isPickable },
+                        Mth.square(reach)
                     )
-                    if (entityHitResult != null && targets.any { it.second && it.first == entityHitResult.entity.type.name.string }) {
+                    if (entityHitResult != null && targets.any { it.second && it.first == entityHitResult.entity.type.description.string }) {
                         val click =
                             clicker.tick(false)
                         if (click > 0) {

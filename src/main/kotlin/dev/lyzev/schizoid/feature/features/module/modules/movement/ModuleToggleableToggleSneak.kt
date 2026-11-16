@@ -5,14 +5,14 @@
 
 package dev.lyzev.schizoid.feature.features.module.modules.movement
 
-import dev.lyzev.api.events.EventClientPlayerEntityTick
+import dev.lyzev.api.events.EventIsMovementKeyPressed
 import dev.lyzev.api.events.EventListener
 import dev.lyzev.api.events.on
 import dev.lyzev.api.setting.settings.switch
 import dev.lyzev.api.settings.Setting.Companion.neq
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.client.gui.screen.ingame.HandledScreen
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 
 object ModuleToggleableToggleSneak :
     ModuleToggleable(
@@ -30,11 +30,11 @@ object ModuleToggleableToggleSneak :
     )
 
     init {
-        on<EventClientPlayerEntityTick> {
-            mc.options.sneakKey.isPressed = true
+        on<EventIsMovementKeyPressed> {
+            if (it.keyBinding == mc.options.keyShift) it.isPressed = true
         }
     }
 
     override val shouldHandleEvents: Boolean
-        get() = isEnabled && (mc.currentScreen == null || ((screen && mc.currentScreen !is HandledScreen<*>) || handledScreen))
+        get() = isEnabled && mc.player != null && (mc.gui.screen() == null || (screen && (handledScreen || mc.gui.screen() !is AbstractContainerScreen<*>)))
 }

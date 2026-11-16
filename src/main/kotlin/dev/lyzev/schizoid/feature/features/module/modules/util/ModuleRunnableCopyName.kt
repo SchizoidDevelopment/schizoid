@@ -12,7 +12,7 @@ object ModuleRunnableCopyName :
     ModuleRunnable("Copy Name", "Copies your username to the clipboard.", category = IFeature.Category.UTIL) {
 
     override fun invoke(): String? {
-        copy(mc.session.username)
+        copy(mc.user.name)
         return null
     }
 }

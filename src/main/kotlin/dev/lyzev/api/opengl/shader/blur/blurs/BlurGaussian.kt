@@ -5,17 +5,16 @@
 
 package dev.lyzev.api.opengl.shader.blur.blurs
 
-import com.mojang.blaze3d.platform.GlConst
-import com.mojang.blaze3d.systems.RenderSystem
+import dev.lyzev.api.opengl.Render
 import dev.lyzev.api.opengl.WrappedFramebuffer
 import dev.lyzev.api.opengl.clear
 import dev.lyzev.api.opengl.shader.Shader
 import dev.lyzev.api.opengl.shader.ShaderGaussian
 import dev.lyzev.api.opengl.shader.blur.Blur
 import dev.lyzev.schizoid.feature.features.module.modules.render.ModuleToggleableBlur
-import net.minecraft.client.gl.Framebuffer
 import org.joml.Vector2f
 import org.joml.Vector3f
+import org.lwjgl.opengl.GL33C.*
 import kotlin.math.exp
 import kotlin.properties.Delegates
 
@@ -72,6 +71,7 @@ object BlurGaussian : Blur {
     }
 
     override fun switchStrength(strength: Int) {
+        val strength = strength.coerceIn(1, cache.size)
         gaussian.set(cache[strength - 1])
         support = strength * 3
     }
@@ -82,12 +82,12 @@ object BlurGaussian : Blur {
      * @param sourceFBO The framebuffer to render from.
      * @param alpha Whether to use alpha blending.
      */
-    private fun renderToFBO(targetFBO: Framebuffer, sourceTex: Int, alpha: Boolean) {
+    private fun renderToFBO(targetFBO: WrappedFramebuffer, sourceTex: Int, alpha: Boolean) {
         targetFBO.clear()
         targetFBO.beginWrite(true)
         ShaderGaussian.bind()
-        RenderSystem.activeTexture(GlConst.GL_TEXTURE0)
-        RenderSystem.bindTexture(sourceTex)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, sourceTex)
         ShaderGaussian.setUniforms(
             direction,
             texelSize.set(1f / targetFBO.textureWidth, 1f / targetFBO.textureHeight),
@@ -100,7 +100,9 @@ object BlurGaussian : Blur {
         ShaderGaussian.unbind()
     }
 
-    override fun render(sourceTex: Int, alpha: Boolean) {
+    override fun render(sourceTex: Int, alpha: Boolean) = Render.isolated {
+        Render.prepareFullscreen()
+        glDisable(GL_BLEND)
         direction.set(1f, 0f)
         renderToFBO(fbos[0], sourceTex, alpha)
         direction.set(0f, 1f)

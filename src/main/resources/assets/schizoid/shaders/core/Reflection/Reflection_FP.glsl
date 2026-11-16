@@ -15,7 +15,7 @@ uniform vec3 CamPos;
 
 #define RECIPROCAL_PI2 0.15915494
 
-#include "3DSimplexNoise.glsl"
+#include "3dsimplexnoise.glsl"
 
 // Credit to https://en.wikipedia.org/wiki/Cube_mapping
 void main() {

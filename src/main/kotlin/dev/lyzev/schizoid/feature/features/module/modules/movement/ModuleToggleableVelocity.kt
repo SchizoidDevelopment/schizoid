@@ -10,12 +10,11 @@ import dev.lyzev.api.setting.settings.*
 import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket
-import net.minecraft.network.packet.s2c.play.ExplosionS2CPacket
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket
+import net.minecraft.network.protocol.game.ClientboundExplodePacket
 import dev.lyzev.api.settings.Setting.Companion.neq
-import dev.lyzev.schizoid.injection.accessor.ExplosionS2CPacketAccessor
-import net.minecraft.client.gui.screen.ingame.HandledScreen
-import net.minecraft.util.math.MathHelper
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
+import net.minecraft.util.Mth
 
 object ModuleToggleableVelocity :
     ModuleToggleable("Velocity", "Modify/Reduce the receiving velocity.", category = IFeature.Category.MOVEMENT),
@@ -32,69 +31,44 @@ object ModuleToggleableVelocity :
     val horizontal by slider("Horizontal", "The horizontal multiplier.", 100, -200, 200, "%%", hide = ::mode neq Mode.Modify)
     val vertical by slider("Vertical", "The vertical multiplier.", 100, -200, 200, "%%", hide = ::mode neq Mode.Modify)
 
-    private var wasJumping = false
+    @Volatile
     private var shouldJump = false
-    private var shouldRestore = false
+    private var jumpThisTick = false
 
     override fun onDisable() {
         shouldJump = false
-        wasJumping = false
+        jumpThisTick = false
     }
 
     override val shouldHandleEvents
-        get() = isEnabled
+        get() = isEnabled && mc.player != null && mc.level != null
 
     init {
         on<EventPacket> { event ->
-            if (event.type == EventPacket.Type.S2C) {
-                if (event.packet is EntityVelocityUpdateS2CPacket || event.packet is ExplosionS2CPacket) {
-                    if (chance < Schizoid.random.nextInt(100)) return@on
-                    packets.forEach {
-                        if (it.second) {
-                            if (it.first == "Velocity" && event.packet is EntityVelocityUpdateS2CPacket) {
-                                val squaredDist = MathHelper.square(event.packet.velocityX) + MathHelper.square(event.packet.velocityZ)
-                                if (squaredDist < MathHelper.square(velocityThreshold)) return@forEach
-                                val entity = mc.world!!.getEntityById(event.packet.id)
-                                if (entity == mc.player) {
-                                    mode.handle(event)
-                                }
-                            } else if (it.first == "Explosion" && event.packet is ExplosionS2CPacket) {
-                                val squaredDist = MathHelper.square(event.packet.playerVelocityX) + MathHelper.square(event.packet.playerVelocityZ)
-                                if (squaredDist < MathHelper.square(velocityThreshold)) return@forEach
-                                mode.handle(event)
-                            }
-                        }
-                    }
+            if (event.type != EventPacket.Type.S2C || event.isCancelled) return@on
+            val packet = event.packet
+            val movement = when (packet) {
+                is ClientboundSetEntityMotionPacket -> {
+                    if (packet.id() != mc.player!!.id || packets.none { it.first == "Velocity" && it.second }) return@on
+                    packet.movement()
                 }
+                is ClientboundExplodePacket -> {
+                    if (packets.none { it.first == "Explosion" && it.second }) return@on
+                    packet.playerKnockback().orElse(null) ?: return@on
+                }
+                else -> return@on
             }
+            if (movement.horizontalDistanceSqr() < Mth.square(velocityThreshold.toDouble())) return@on
+            if (Schizoid.random.nextInt(100) >= chance) return@on
+            mode.handle(event)
         }
         on<EventClientPlayerEntityTick> {
-            if (shouldJump) {
-                if ((jumpInScreen && (jumpInHandledScreen || mc.currentScreen !is HandledScreen<*>)) || mc.currentScreen == null) {
-                    if (!shouldRestore) {
-                        wasJumping = mc.options.jumpKey.isPressed
-                    }
-                    mc.options.jumpKey.isPressed = true
-                    shouldRestore = true
-                }
-                shouldJump = false
-            } else if (shouldRestore) {
-                mc.options.jumpKey.isPressed = wasJumping
-                shouldRestore = false
-            }
+            val screen = mc.gui.screen()
+            jumpThisTick = shouldJump && (screen == null || (jumpInScreen && (jumpInHandledScreen || screen !is AbstractContainerScreen<*>)))
+            shouldJump = false
         }
-        on<EventVelocity> { event ->
-            if (mode != Mode.Modify) return@on
-            val squaredDist = MathHelper.square(event.x) + MathHelper.square(event.z)
-            if (squaredDist < MathHelper.square(velocityThreshold)) return@on
-            if (chance < Schizoid.random.nextInt(100)) return@on
-            packets.forEach {
-                if (it.second && it.first == "Velocity") {
-                    event.x *= (horizontal / 100.0)
-                    event.y *= (vertical / 100.0)
-                    event.z *= (horizontal / 100.0)
-                }
-            }
+        on<EventIsMovementKeyPressed> {
+            if (jumpThisTick && it.keyBinding == mc.options.keyJump) it.isPressed = true
         }
     }
 
@@ -107,11 +81,16 @@ object ModuleToggleableVelocity :
         Modify {
             override fun handle(event: EventPacket) {
                 val packet = event.packet
-                if (packet is ExplosionS2CPacket) {
-                    val accessor = packet as ExplosionS2CPacketAccessor
-                    accessor.setPlayerVelocityX(packet.playerVelocityX * (horizontal / 100f))
-                    accessor.setPlayerVelocityY(packet.playerVelocityY * (vertical / 100f))
-                    accessor.setPlayerVelocityZ(packet.playerVelocityZ * (horizontal / 100f))
+                if (packet is ClientboundExplodePacket) {
+                    event.packet = ClientboundExplodePacket(
+                        packet.center(), packet.radius(), packet.blockCount(),
+                        packet.playerKnockback().map { it.multiply(horizontal / 100.0, vertical / 100.0, horizontal / 100.0) },
+                        packet.explosionParticle(), packet.explosionSound(), packet.blockParticles()
+                    )
+                } else if (packet is ClientboundSetEntityMotionPacket) {
+                    event.packet = ClientboundSetEntityMotionPacket(
+                        packet.id(), packet.movement().multiply(horizontal / 100.0, vertical / 100.0, horizontal / 100.0)
+                    )
                 }
             }
         },

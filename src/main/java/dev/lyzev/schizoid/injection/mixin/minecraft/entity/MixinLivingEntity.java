@@ -11,11 +11,12 @@ import dev.lyzev.api.events.EventGetAttributeValue;
 import dev.lyzev.api.events.EventHasStatusEffect;
 import dev.lyzev.schizoid.Schizoid;
 import dev.lyzev.schizoid.feature.features.module.modules.movement.ModuleToggleableAirJump;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.attribute.AttributeContainer;
-import net.minecraft.entity.attribute.EntityAttribute;
-import net.minecraft.entity.effect.StatusEffect;
-import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.AttributeMap;
+import net.minecraft.world.entity.ai.attributes.Attribute;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.core.Holder;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -34,10 +35,10 @@ public abstract class MixinLivingEntity {
     protected boolean jumping;
 
     @Shadow
-    private int jumpingCooldown;
+    private int noJumpDelay;
 
     @Shadow
-    protected abstract void jump();
+    public abstract void jumpFromGround();
 
     /**
      * This method is a mixin for the tickMovement method of the LivingEntity class.
@@ -46,11 +47,13 @@ public abstract class MixinLivingEntity {
      *
      * @param ci The callback information.
      */
-    @Inject(method = "tickMovement", at = @At(value = "FIELD", target = "Lnet/minecraft/entity/LivingEntity;jumping:Z", ordinal = 1, shift = At.Shift.BEFORE))
+    @Inject(method = "aiStep", at = @At(value = "FIELD", target = "Lnet/minecraft/world/entity/LivingEntity;jumping:Z", opcode = Opcodes.GETFIELD, ordinal = 0))
     private void onTickMovement(CallbackInfo ci) {
-        if (ModuleToggleableAirJump.INSTANCE.isEnabled() && jumping && 10 - ModuleToggleableAirJump.INSTANCE.getJumpCooldown() >= jumpingCooldown) {
-            jump();
-            jumpingCooldown = 0;
+        LivingEntity entity = (LivingEntity) (Object) this;
+        if (entity == Schizoid.INSTANCE.getMc().player && ModuleToggleableAirJump.INSTANCE.isEnabled()
+                && jumping && !entity.onGround() && 10 - ModuleToggleableAirJump.INSTANCE.getJumpCooldown() >= noJumpDelay) {
+            jumpFromGround();
+            noJumpDelay = 10;
         }
     }
 
@@ -62,16 +65,16 @@ public abstract class MixinLivingEntity {
      * @param effect The status effect to check.
      * @param cir    The callback information, which includes the return value of the status effect check.
      */
-    @Inject(method = "hasStatusEffect", at = @At("RETURN"), cancellable = true)
-    public void onHasStatusEffect(RegistryEntry<StatusEffect> effect, CallbackInfoReturnable<Boolean> cir) {
+    @Inject(method = "hasEffect", at = @At("RETURN"), cancellable = true)
+    public void onHasStatusEffect(Holder<MobEffect> effect, CallbackInfoReturnable<Boolean> cir) {
         EventHasStatusEffect event = new EventHasStatusEffect((LivingEntity) (Object) this, effect.value(), cir.getReturnValue());
         event.fire();
         cir.setReturnValue(event.getHasStatusEffect());
     }
 
-    @WrapOperation(method = "getAttributeValue", at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/attribute/AttributeContainer;getValue(Lnet/minecraft/registry/entry/RegistryEntry;)D", ordinal = 0))
-    private double onGetAttributeValue(AttributeContainer instance, RegistryEntry<EntityAttribute> attribute, Operation<Double> original) {
-        if (!this.equals(Schizoid.INSTANCE.getMc().player)) {
+    @WrapOperation(method = "getAttributeValue", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/ai/attributes/AttributeMap;getValue(Lnet/minecraft/core/Holder;)D", ordinal = 0))
+    private double onGetAttributeValue(AttributeMap instance, Holder<Attribute> attribute, Operation<Double> original) {
+        if ((Object) this != Schizoid.INSTANCE.getMc().player) {
             return original.call(instance, attribute);
         }
         EventGetAttributeValue event = new EventGetAttributeValue(attribute.value(), original.call(instance, attribute));

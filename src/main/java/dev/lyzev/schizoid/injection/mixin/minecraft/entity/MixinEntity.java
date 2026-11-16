@@ -12,13 +12,13 @@ import dev.lyzev.api.events.EventLerpPosAndRotation;
 import dev.lyzev.api.events.EventUpdateVelocity;
 import dev.lyzev.api.events.EventVelocity;
 import dev.lyzev.schizoid.Schizoid;
-import dev.lyzev.schizoid.feature.features.module.modules.player.FeatureRotation;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
@@ -28,9 +28,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(Entity.class)
 public abstract class MixinEntity {
-
-    @Shadow
-    public abstract boolean equals(Object o);
 
     /**
      * This method is a redirect for the isInvisibleTo method of the Entity class.
@@ -42,15 +39,15 @@ public abstract class MixinEntity {
      * @return The invisibility status of the Entity, as determined by the EventIsInvisibleTo event.
      */
     @Inject(method = "isInvisibleTo", at = @At("RETURN"), cancellable = true)
-    private void onIsInvisibleTo(PlayerEntity player, CallbackInfoReturnable<Boolean> cir) {
+    private void onIsInvisibleTo(Player player, CallbackInfoReturnable<Boolean> cir) {
         EventIsInvisibleTo event = new EventIsInvisibleTo(cir.getReturnValueZ());
         event.fire();
         cir.setReturnValue(event.isInvisible());
     }
 
-    @WrapOperation(method = "updateVelocity", at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/Entity;getYaw()F"))
+    @WrapOperation(method = "moveRelative", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;getYRot()F"))
     private float onUpdateVelocity(Entity instance, Operation<Float> original) {
-        if (!instance.equals(Schizoid.INSTANCE.getMc().player)) {
+        if (instance != Schizoid.INSTANCE.getMc().player) {
             return original.call(instance);
         }
         EventUpdateVelocity event = new EventUpdateVelocity(original.call(instance));
@@ -58,23 +55,21 @@ public abstract class MixinEntity {
         return event.getYaw();
     }
 
-    @SuppressWarnings("RedundantCast") // false positive, because the precision error when casting to double is necessary
-    @Inject(method = "lerpPosAndRotation", at = @At("RETURN"))
+    @Inject(method = "lerpPositionAndRotationStep", at = @At("RETURN"))
     private void onLerpPosAndRotation(int step, double x, double y, double z, double yaw, double pitch, CallbackInfo ci) {
-        if (!this.equals(Schizoid.INSTANCE.getMc().player)) {
+        if ((Object) this != Schizoid.INSTANCE.getMc().player) {
             return;
         }
         new EventLerpPosAndRotation(step, x, y, z, yaw, pitch).fire();
     }
 
-    @Inject(method = "setVelocityClient", at = @At("HEAD"), cancellable = true)
-    private void onSetVelocityClient(double x, double y, double z, CallbackInfo ci) {
-        if (!this.equals(Schizoid.INSTANCE.getMc().player)) {
-            return;
+    @ModifyVariable(method = "lerpMotion", at = @At("HEAD"), argsOnly = true)
+    private Vec3 onSetVelocityClient(Vec3 movement) {
+        if ((Object) this != Schizoid.INSTANCE.getMc().player) {
+            return movement;
         }
-        ci.cancel();
-        EventVelocity event = new EventVelocity(x, y, z);
+        EventVelocity event = new EventVelocity(movement.x, movement.y, movement.z);
         event.fire();
-        ((Entity) (Object) this).setVelocity(event.getX(), event.getY(), event.getZ());
+        return new Vec3(event.getX(), event.getY(), event.getZ());
     }
 }

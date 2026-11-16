@@ -8,7 +8,10 @@ package dev.lyzev.api.imgui.font
 import dev.lyzev.api.imgui.font.icon.FontAwesomeIcons
 import dev.lyzev.schizoid.Schizoid
 import imgui.ImFont
+import imgui.ImFontConfig
 import imgui.ImGui.*
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Enum class representing different types of fonts.
@@ -29,6 +32,12 @@ enum class ImGuiFonts(override val fontName: String, override val type: ImGuiFon
         override val glyphRanges: ShortArray
             get() = FontAwesomeIcons._IconRange
     },
+    // The spatial toolbar is a world object: a 10 px glyph maps to a couple of screen pixels at any
+    // real distance and reads as a smudge, so the strip needs its own, larger rasterisation.
+    FONT_AWESOME_SOLID_MEDIUM("fa-solid-900", ImGuiFont.Type.TTF, 17f) {
+        override val glyphRanges: ShortArray
+            get() = FontAwesomeIcons._IconRange
+    },
     FONT_AWESOME_SOLID_BIG("fa-solid-900", ImGuiFont.Type.TTF, 50f) {
         override val glyphRanges: ShortArray
             get() = FontAwesomeIcons._IconRange
@@ -42,8 +51,30 @@ enum class ImGuiFonts(override val fontName: String, override val type: ImGuiFon
 
     init {
         val fontAtlas = getIO().fonts
-        val `is` = javaClass.getResourceAsStream("/assets/${Schizoid.MOD_ID}/fonts/$fontName.${type.name.lowercase()}")
-        requireNotNull(`is`) { "Font file not found: $fontName.${type.name.lowercase()}" }
-        font = fontAtlas.addFontFromMemoryTTF(`is`.readAllBytes(), size, glyphRanges)
+        fun addResource(name: String, ranges: ShortArray, config: ImFontConfig): ImFont {
+            val resource = "/assets/${Schizoid.MOD_ID}/fonts/$name.ttf"
+            val temporary = Files.createTempFile("schizoid-imgui-font-", ".ttf")
+            try {
+                requireNotNull(javaClass.getResourceAsStream(resource)) { "Font file not found: $resource" }
+                    .use { Files.copy(it, temporary, StandardCopyOption.REPLACE_EXISTING) }
+                check(Files.size(temporary) > 0) { "Font file is empty: $resource" }
+                return checkNotNull(fontAtlas.addFontFromFileTTF(temporary.toAbsolutePath().toString(), size, config, ranges)) {
+                    "Could not register font: $resource"
+                }
+            } finally {
+                Files.deleteIfExists(temporary)
+            }
+        }
+        val config = ImFontConfig()
+        try {
+            font = addResource(fontName, glyphRanges, config)
+            if (fontName == "LeagueSpartan-ExtraBold") {
+                config.mergeMode = true
+                val merged = addResource("OpenSans-Bold", shortArrayOf(0x0400, 0x052f, 0), config)
+                check(merged.ptr == font.ptr) { "Cyrillic merge selected an unexpected font" }
+            }
+        } finally {
+            config.destroy()
+        }
     }
 }

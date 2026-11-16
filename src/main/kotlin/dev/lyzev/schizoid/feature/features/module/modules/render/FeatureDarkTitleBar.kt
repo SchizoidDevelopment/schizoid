@@ -36,12 +36,12 @@ object FeatureDarkTitleBar : IFeature, EventListener {
             Mode.Dark -> true
             Mode.System -> OSTheme.getCurrentTheme() == OSTheme.Theme.Dark
         }
-        val win32 = GLFWNativeWin32.glfwGetWin32Window(mc.window.handle)
+        val win32 = GLFWNativeWin32.glfwGetWin32Window(mc.window.handle())
         val hwnd = HWND(Pointer(win32))
         DwmApi.DwmSetWindowAttribute(hwnd, 20, IntByReference(if (dark) 1 else 0), 4)
         // Workaround: Reload window
-        GLFW.glfwHideWindow(mc.window.handle)
-        GLFW.glfwShowWindow(mc.window.handle)
+        GLFW.glfwHideWindow(mc.window.handle())
+        GLFW.glfwShowWindow(mc.window.handle())
         prevMode = value
     }
 
@@ -63,7 +63,10 @@ object FeatureDarkTitleBar : IFeature, EventListener {
         } else {
             setTitleBarColor(mode)
             on<EventOSThemeUpdate> {
-                setTitleBarColor(if (it.theme == OSTheme.Theme.Dark) Mode.Dark else Mode.Light)
+                // GLFW window operations must run on the Minecraft thread, not the registry watcher.
+                mc.execute {
+                    if (mode == Mode.System) setTitleBarColor(Mode.System)
+                }
             }
         }
     }

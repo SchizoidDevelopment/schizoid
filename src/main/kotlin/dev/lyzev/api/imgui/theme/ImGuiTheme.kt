@@ -10,7 +10,7 @@ import imgui.ImGuiStyle
 import imgui.ImVec2
 import imgui.extension.implot.ImPlot
 import imgui.flag.ImGuiCol.*
-import net.minecraft.client.gui.DrawContext
+import net.minecraft.client.gui.GuiGraphicsExtractor
 import java.awt.Color
 
 /**
@@ -55,7 +55,7 @@ interface ImGuiTheme {
      * @param width The width of the background.
      * @param height The height of the background.
      */
-    fun renderInGameBackground(context: DrawContext, width: Int, height: Int)
+    fun renderInGameBackground(context: GuiGraphicsExtractor, width: Int, height: Int)
 
     /**
      * Sets the color of an ImGuiCol.
@@ -206,7 +206,7 @@ abstract class ImGuiThemeBaseDark(primary: Color, secondary: Color, accent: Colo
     accent
 ) {
 
-    override fun renderInGameBackground(context: DrawContext, width: Int, height: Int) =
+    override fun renderInGameBackground(context: GuiGraphicsExtractor, width: Int, height: Int) =
         context.fillGradient(0, 0, width, height, -1072689136, -804253680)
 }
 
@@ -228,7 +228,7 @@ abstract class ImGuiThemeBaseLight(primary: Color, secondary: Color, accent: Col
     accent
 ) {
 
-    override fun renderInGameBackground(context: DrawContext, width: Int, height: Int) =
+    override fun renderInGameBackground(context: GuiGraphicsExtractor, width: Int, height: Int) =
         context.fillGradient(0, 0, width, height, 0x64f0efef, 0x18f0efef)
 }
 
@@ -243,6 +243,6 @@ abstract class ImGuiThemeBaseGlassmorphism(primary: Color, secondary: Color, acc
     accent
 ) {
 
-    override fun renderInGameBackground(context: DrawContext, width: Int, height: Int) {
+    override fun renderInGameBackground(context: GuiGraphicsExtractor, width: Int, height: Int) {
     }
 }

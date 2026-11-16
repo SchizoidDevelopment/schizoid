@@ -5,42 +5,19 @@
 
 package dev.lyzev.schizoid.injection.mixin.minecraft.client.util;
 
-import dev.lyzev.api.events.EventGlfwInit;
 import dev.lyzev.api.events.EventSwapBuffers;
-import net.minecraft.client.util.Window;
-import org.spongepowered.asm.mixin.Final;
+import com.mojang.blaze3d.opengl.GlSurface;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * This class provides a mixin for the Window class in the Minecraft client util package.
- * It modifies the behavior of the setPhase method of the Window class.
+ * The OpenGL surface owns buffer swapping in 26.2. GLFW initialization is handled once by CLIENT_STARTED.
  */
-@Mixin(Window.class)
+@Mixin(GlSurface.class)
 public class MixinWindow {
-
-    @Shadow
-    @Final
-    private long handle;
-
-    /**
-     * This method is a mixin for the setPhase method of the Window class.
-     * It creates and fires an EventGlfwInit event when the phase is set to "Post startup".
-     * The event is fired at the start of the method.
-     *
-     * @param phase The phase that is being set.
-     * @param ci    The callback information.
-     */
-    @Inject(method = "setPhase", at = @At("HEAD"))
-    private void onSetPhase(String phase, CallbackInfo ci) {
-        if (phase.equals("Post startup"))
-            new EventGlfwInit(handle).fire();
-    }
-
-    @Inject(method = "swapBuffers", at = @At("HEAD"))
+    @Inject(method = "present", at = @At("HEAD"))
     private void onSwapBuffers(CallbackInfo ci) {
         EventSwapBuffers.INSTANCE.fire();
     }

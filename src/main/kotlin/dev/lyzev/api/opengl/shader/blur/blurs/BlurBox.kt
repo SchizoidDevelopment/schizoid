@@ -5,15 +5,14 @@
 
 package dev.lyzev.api.opengl.shader.blur.blurs
 
-import com.mojang.blaze3d.platform.GlConst
-import com.mojang.blaze3d.systems.RenderSystem
+import dev.lyzev.api.opengl.Render
 import dev.lyzev.api.opengl.WrappedFramebuffer
 import dev.lyzev.api.opengl.clear
 import dev.lyzev.api.opengl.shader.Shader
 import dev.lyzev.api.opengl.shader.ShaderBox
 import dev.lyzev.api.opengl.shader.blur.Blur
-import net.minecraft.client.gl.Framebuffer
 import org.joml.Vector2f
+import org.lwjgl.opengl.GL33C.*
 import kotlin.math.ceil
 import kotlin.math.sqrt
 import kotlin.properties.Delegates
@@ -57,12 +56,12 @@ object BlurBox : Blur {
      * @param sourceFBO The framebuffer to render from.
      * @param alpha Whether to use alpha blending.
      */
-    private fun renderToFBO(targetFBO: Framebuffer, sourceTex: Int, alpha: Boolean) {
+    private fun renderToFBO(targetFBO: WrappedFramebuffer, sourceTex: Int, alpha: Boolean) {
         targetFBO.clear()
         targetFBO.beginWrite(true)
         ShaderBox.bind()
-        RenderSystem.activeTexture(GlConst.GL_TEXTURE0)
-        RenderSystem.bindTexture(sourceTex)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, sourceTex)
         ShaderBox.setUniforms(
             direction,
             texelSize.set(1f / targetFBO.textureWidth, 1f / targetFBO.textureHeight),
@@ -73,7 +72,9 @@ object BlurBox : Blur {
         ShaderBox.unbind()
     }
 
-    override fun render(sourceTex: Int, alpha: Boolean) {
+    override fun render(sourceTex: Int, alpha: Boolean) = Render.isolated {
+        Render.prepareFullscreen()
+        glDisable(GL_BLEND)
         // Initial iteration
         direction.set(1f, 0f)
         renderToFBO(fbos[0], sourceTex, alpha)

@@ -31,7 +31,7 @@ object ModuleToggleableModules : ModuleToggleableRenderImGuiContent(
         dummy(90f, 0f)
         sameLine(getStyle().windowPaddingX)
         val pos = getWindowPosX()
-        val half = mc.framebuffer.textureWidth / 2
+        val half = mc.window.width / 2
         val max = getWindowContentRegionMaxX()
         FeatureManager.features.filter { it is ModuleToggleable && it.isEnabled && it.showInArrayList }
             .forEach { module ->

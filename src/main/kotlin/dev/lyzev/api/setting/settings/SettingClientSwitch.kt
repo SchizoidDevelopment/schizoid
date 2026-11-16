@@ -16,7 +16,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonPrimitive
-import net.minecraft.util.math.MathHelper
+import net.minecraft.util.Mth
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty
 
@@ -97,9 +97,9 @@ class Switch {
         val delta = EasingFunction.LINEAR.ease(timeAnimator.getProgress()).toFloat()
         val primary = getStyle().getColor(Button)
         val hsvTrackColor = ImColor.rgb(
-            MathHelper.lerp(delta, track[0], primary.x),
-            MathHelper.lerp(delta, track[1], primary.y),
-            MathHelper.lerp(delta, track[2], primary.z)
+            Mth.lerp(delta, track[0], primary.x),
+            Mth.lerp(delta, track[1], primary.y),
+            Mth.lerp(delta, track[2], primary.z)
         )
         drawList.addRectFilled(
             p.x,

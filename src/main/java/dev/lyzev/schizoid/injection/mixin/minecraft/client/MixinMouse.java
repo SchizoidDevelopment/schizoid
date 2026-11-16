@@ -11,8 +11,10 @@ import dev.lyzev.api.events.EventIsCursorLocked;
 import dev.lyzev.api.events.EventMouseClick;
 import dev.lyzev.api.events.EventMouseScroll;
 import dev.lyzev.api.events.EventUpdateMouse;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.Mouse;
+import dev.lyzev.api.imgui.spatial.SpatialInputRouter;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.MouseHandler;
+import net.minecraft.client.input.MouseButtonInfo;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -23,8 +25,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * This class provides a mixin for the Mouse class in the Minecraft client package.
  * It modifies the behavior of the onMouseButton method of the Mouse class.
  */
-@Mixin(Mouse.class)
+@Mixin(MouseHandler.class)
 public class MixinMouse {
+    @Inject(method = "onButton", at = @At("HEAD"), cancellable = true)
+    private void worldButton(long window, MouseButtonInfo button, int action, CallbackInfo ci) {
+        if (SpatialInputRouter.INSTANCE.onButton(window, button.button(), action, button.modifiers())) ci.cancel();
+    }
+
+    @Inject(method = {"onMove", "lambda$setup$0"}, at = @At("HEAD"), cancellable = true)
+    private void worldMove(long window, double x, double y, CallbackInfo ci) {
+        if (SpatialInputRouter.INSTANCE.onMove(window, x, y)) ci.cancel();
+    }
 
     /**
      * This method is a mixin for the onMouseButton method of the Mouse class.
@@ -34,13 +45,12 @@ public class MixinMouse {
      * @param window The window where the mouse button was clicked.
      * @param button The button that was clicked.
      * @param action The action that was performed.
-     * @param mods   The modifier keys that were held down when the button was clicked.
      * @param ci     The callback information.
      */
-    @Inject(method = "onMouseButton", at = @At("HEAD"))
-    private void onMouseButton(long window, int button, int action, int mods, CallbackInfo ci) {
-        if (button != GLFW.GLFW_KEY_UNKNOWN && window == MinecraftClient.getInstance().getWindow().getHandle())
-            new EventMouseClick(window, button, action, mods).fire();
+    @Inject(method = "onButton", at = @At("RETURN"))
+    private void onMouseButton(long window, MouseButtonInfo button, int action, CallbackInfo ci) {
+        if (button.button() != GLFW.GLFW_KEY_UNKNOWN && window == Minecraft.getInstance().getWindow().handle())
+            new EventMouseClick(window, button.button(), action, button.modifiers()).fire();
     }
 
     /**
@@ -51,8 +61,8 @@ public class MixinMouse {
      * @param instance The Mouse instance.
      * @return The return value of the event.
      */
-    @WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Mouse;isCursorLocked()Z"))
-    private boolean onTick(Mouse instance, Operation<Boolean> original) {
+    @WrapOperation(method = "handleAccumulatedMovement", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/MouseHandler;isMouseGrabbed()Z"))
+    private boolean onTick(MouseHandler instance, Operation<Boolean> original) {
         EventIsCursorLocked event = new EventIsCursorLocked(original.call(instance));
         event.fire();
         return event.isCursorLocked();
@@ -65,14 +75,20 @@ public class MixinMouse {
      *
      * @param ci The callback information.
      */
-    @Inject(method = "updateMouse", at = @At("HEAD"))
-    private void onUpdateMouse2(CallbackInfo ci) {
+    @Inject(method = "turnPlayer", at = @At("HEAD"))
+    private void onUpdateMouse(double elapsedTime, CallbackInfo ci) {
+        // Camera turning stays enabled on purpose: with gaze aiming the crosshair *is* the pointer,
+        // so the player looks around to move it. The router arbitrates clicks, not the look.
         EventUpdateMouse.INSTANCE.fire();
     }
 
-    @Inject(method = "onMouseScroll", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "onScroll", at = @At("HEAD"), cancellable = true)
     private void onScroll(long window, double horizontal, double vertical, CallbackInfo ci) {
-        if (window == MinecraftClient.getInstance().getWindow().getHandle()) {
+        if (SpatialInputRouter.INSTANCE.onScroll(window, horizontal, vertical)) {
+            ci.cancel();
+            return;
+        }
+        if (window == Minecraft.getInstance().getWindow().handle()) {
             EventMouseScroll event = new EventMouseScroll(horizontal, vertical);
             event.fire();
             if (event.isCancelled()) {

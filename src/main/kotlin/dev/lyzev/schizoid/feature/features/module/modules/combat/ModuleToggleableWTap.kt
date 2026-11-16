@@ -7,6 +7,7 @@ package dev.lyzev.schizoid.feature.features.module.modules.combat
 
 import dev.lyzev.api.events.EventAttackEntityPre
 import dev.lyzev.api.events.EventClientPlayerEntityTick
+import dev.lyzev.api.events.EventIsMovementKeyPressed
 import dev.lyzev.api.events.EventListener
 import dev.lyzev.api.events.on
 import dev.lyzev.api.setting.settings.OptionEnum
@@ -15,7 +16,7 @@ import dev.lyzev.api.setting.settings.slider
 import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket
 
 object ModuleToggleableWTap :
     ModuleToggleable("W-Tap", "Automatically W-Taps in combat.", category = IFeature.Category.COMBAT), EventListener {
@@ -32,26 +33,16 @@ object ModuleToggleableWTap :
         "Random Tick Offset", "Applies a random tick offset to the start/stop delay.", 2, 0, 10, "ticks"
     )
 
-    private var wasSprinting = false
-    private var wasToggledSprinting = false
-    private var wasForward = false
-    private var wasBack = false
     private var shouldStop = false
     private var shouldStart = false
 
     override fun onDisable() {
-        if (shouldStart) {
-            mc.options.sprintKey.isPressed = wasSprinting
-            mc.options.sprintToggled.value = wasToggledSprinting
-            mc.options.forwardKey.isPressed = wasForward
-            mc.options.backKey.isPressed = wasBack
-        }
         shouldStop = false
         shouldStart = false
     }
 
     override val shouldHandleEvents
-        get() = isEnabled
+        get() = isEnabled && mc.player != null
 
     init {
         var stop = 0
@@ -70,30 +61,26 @@ object ModuleToggleableWTap :
         on<EventClientPlayerEntityTick> {
             if (shouldStop) {
                 if (stop >= stopTick) {
-                    if (mode != Mode.Packet) {
-                        if (!shouldStart) {
-                            wasSprinting = mc.options.sprintKey.isPressed
-                            wasToggledSprinting = mc.options.sprintToggled.value
-                            wasForward = mc.options.forwardKey.isPressed
-                            wasBack = mc.options.backKey.isPressed
-                            shouldStart = true
-                        }
-                    }
+                    shouldStart = mode != Mode.Packet
                     mode.handle()
                     start = 0
-                    startTick = startDelay + Schizoid.random.nextInt(randomTickOffset)
+                    startTick = startDelay + Schizoid.random.nextInt(randomTickOffset + 1)
                     shouldStop = false
                 }
                 stop++
             } else if (shouldStart) {
                 if (start >= startTick) {
-                    mc.options.sprintKey.isPressed = wasSprinting
-                    mc.options.sprintToggled.value = wasToggledSprinting
-                    mc.options.forwardKey.isPressed = wasForward
-                    mc.options.backKey.isPressed = wasBack
                     shouldStart = false
                 }
                 start++
+            }
+        }
+        // Override only this tick's input; never toggle or restore another mod's key state.
+        on<EventIsMovementKeyPressed> { event ->
+            if (!shouldStart) return@on
+            when (event.keyBinding) {
+                mc.options.keySprint, mc.options.keyUp -> event.isPressed = false
+                mc.options.keyDown -> if (mode == Mode.STap) event.isPressed = true
             }
         }
     }
@@ -101,29 +88,27 @@ object ModuleToggleableWTap :
     enum class Mode : OptionEnum {
         Packet {
             override fun handle() {
-                mc.player!!.networkHandler.sendPacket(
-                    ClientCommandC2SPacket(
-                        mc.player, ClientCommandC2SPacket.Mode.STOP_SPRINTING
+                val player = mc.player ?: return
+                player.connection.send(
+                    ServerboundPlayerCommandPacket(
+                        player, ServerboundPlayerCommandPacket.Action.STOP_SPRINTING
                     )
                 )
-                mc.player!!.networkHandler.sendPacket(
-                    ClientCommandC2SPacket(
-                        mc.player, ClientCommandC2SPacket.Mode.START_SPRINTING
+                player.connection.send(
+                    ServerboundPlayerCommandPacket(
+                        player, ServerboundPlayerCommandPacket.Action.START_SPRINTING
                     )
                 )
             }
         },
         WTap {
             override fun handle() {
-                mc.options.sprintKey.isPressed = false
-                mc.options.forwardKey.isPressed = false
+                mc.player?.isSprinting = false
             }
         },
         STap {
             override fun handle() {
-                mc.options.sprintKey.isPressed = false
-                mc.options.forwardKey.isPressed = false
-                mc.options.backKey.isPressed = true
+                mc.player?.isSprinting = false
             }
         };
 

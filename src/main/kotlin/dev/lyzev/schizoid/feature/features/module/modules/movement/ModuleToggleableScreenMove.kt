@@ -5,6 +5,7 @@
 
 package dev.lyzev.schizoid.feature.features.module.modules.movement
 
+import com.mojang.blaze3d.platform.InputConstants
 import dev.lyzev.api.events.*
 import dev.lyzev.api.glfw.GLFWKey
 import dev.lyzev.api.setting.settings.slider
@@ -12,10 +13,9 @@ import dev.lyzev.api.setting.settings.switch
 import dev.lyzev.api.settings.Setting.Companion.neq
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.client.gui.screen.ChatScreen
-import net.minecraft.client.gui.screen.ingame.CreativeInventoryScreen
-import net.minecraft.client.gui.screen.ingame.HandledScreen
-import net.minecraft.item.ItemGroups
+import net.minecraft.client.gui.screens.ChatScreen
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
+import org.lwjgl.glfw.GLFW
 
 object ModuleToggleableScreenMove :
     ModuleToggleable("Screen Move", "Allows you to move while in GUI screens.", category = IFeature.Category.MOVEMENT),
@@ -26,26 +26,34 @@ object ModuleToggleableScreenMove :
     val keyboard by switch("Keyboard", "Pass through the keyboard.", true)
 
     override val shouldHandleEvents: Boolean
-        get() = isEnabled && isIngame && mc.currentScreen != null && mc.currentScreen !is HandledScreen<*> && !mc.currentScreen!!.shouldPause()
+        get() = isEnabled && mc.player != null && mc.gui.screen()?.let { it !is AbstractContainerScreen<*> && !it.isPauseScreen } == true
+
+    private fun isPhysicallyDown(key: InputConstants.Key): Boolean = when (key.type) {
+        InputConstants.Type.MOUSE -> GLFW.glfwGetMouseButton(mc.window.handle(), key.value) == GLFW.GLFW_PRESS
+        InputConstants.Type.KEYSYM -> InputConstants.isKeyDown(mc.window, key.value)
+        InputConstants.Type.SCANCODE -> GLFWKey.entries.any {
+            it.code >= GLFW.GLFW_KEY_SPACE && GLFW.glfwGetKeyScancode(it.code) == key.value && it.isPressed()
+        }
+    }
 
     init {
         val movementKeys = listOf(
-            mc.options.forwardKey,
-            mc.options.backKey,
-            mc.options.rightKey,
-            mc.options.leftKey,
-            mc.options.jumpKey,
-            mc.options.sneakKey,
-            mc.options.sprintKey
-        ).map { switch(it.defaultKey.translationKey, "Pass through the keybinding.", true, ::keyboard neq true) }
+            mc.options.keyUp,
+            mc.options.keyDown,
+            mc.options.keyRight,
+            mc.options.keyLeft,
+            mc.options.keyJump,
+            mc.options.keyShift,
+            mc.options.keySprint
+        ).map { switch(it.defaultKey.name, "Pass through the keybinding.", true, ::keyboard neq true) }
 
         on<EventIsMovementKeyPressed> { event ->
-            if (!keyboard || mc.currentScreen is ChatScreen || (mc.currentScreen is CreativeInventoryScreen && CreativeInventoryScreen.selectedTab == ItemGroups.SEARCH))
+            if (!keyboard || mc.gui.screen() is ChatScreen || event.keyBinding.isUnbound)
                 return@on
-            val key = event.keyBinding.defaultKey.translationKey
+            val key = event.keyBinding.defaultKey.name
             movementKeys.find { it.name == key }?.let {
                 if (it.value)
-                    event.isPressed = GLFWKey.isPressed(event.keyBinding.boundKey.code)
+                    event.isPressed = isPhysicallyDown(event.keyBinding.key)
             }
         }
 
@@ -58,10 +66,10 @@ object ModuleToggleableScreenMove :
         on<EventUpdateMouse> {
             if (!mouse)
                 return@on
-            val mouse = mc.mouse
+            val mouse = mc.mouseHandler
             val weight = weight / 100f
-            mouse.cursorDeltaX *= weight
-            mouse.cursorDeltaY *= weight
+            mouse.accumulatedDX *= weight
+            mouse.accumulatedDY *= weight
         }
     }
 }

@@ -1,4 +1,7 @@
 .gradle
+.kotlin/
+/hs_err_pid*.log
+/replay_pid*.log
 logs
 build/
 !gradle/wrapper/gradle-wrapper.jar
@@ -47,3 +50,6 @@ bin/
 
 ### Schizoid ###
 src/main/resources/app.properties
+
+### Dev run artefacts (Sodium/launcher) ###
+/config/

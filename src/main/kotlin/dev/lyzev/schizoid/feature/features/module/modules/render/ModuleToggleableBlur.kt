@@ -5,29 +5,44 @@
 
 package dev.lyzev.schizoid.feature.features.module.modules.render
 
-import com.mojang.blaze3d.platform.GlStateManager
-import com.mojang.blaze3d.systems.RenderSystem
 import dev.lyzev.api.events.EventListener
 import dev.lyzev.api.events.EventRenderWorld
 import dev.lyzev.api.events.on
 import dev.lyzev.api.opengl.Render
+import dev.lyzev.api.opengl.OpenGlBridge
 import dev.lyzev.api.opengl.WrappedFramebuffer
-import dev.lyzev.api.opengl.clear
+import dev.lyzev.api.opengl.beginRead
+import dev.lyzev.api.opengl.beginWrite
 import dev.lyzev.api.opengl.shader.*
 import dev.lyzev.api.opengl.shader.blur.Blurs
 import dev.lyzev.api.setting.settings.option
 import dev.lyzev.api.setting.settings.slider
 import dev.lyzev.api.setting.settings.switch
 import dev.lyzev.api.settings.Setting.Companion.neq
+import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.IFeature
 import dev.lyzev.schizoid.feature.features.module.ModuleToggleable
-import net.minecraft.client.MinecraftClient
-import net.minecraft.util.math.MathHelper
-import org.lwjgl.opengl.GL13
+import net.minecraft.client.Camera
+import org.lwjgl.opengl.GL11C.GL_TEXTURE_2D
+import org.lwjgl.opengl.GL11C.glBindTexture
+import org.lwjgl.opengl.GL13C.GL_TEXTURE0
+import org.lwjgl.opengl.GL13C.GL_TEXTURE1
+import org.lwjgl.opengl.GL13C.glActiveTexture
 
 object ModuleToggleableBlur :
     ModuleToggleable("Blur", "All settings related to blur effects.", category = IFeature.Category.RENDER),
     EventListener {
+
+    /**
+     * Forces the effect on for a dev run without touching [isEnabled], which is a setting and therefore
+     * writes the player's config. See `ModuleDepthOfField.autotestEnabled`.
+     */
+    internal var autotestEnabled = false
+
+    /** Read this instead of [isEnabled] everywhere the effect is applied, so a dev run behaves exactly
+     * like a user-toggled one while persisting nothing. */
+    val isActive: Boolean
+        get() = isEnabled || autotestEnabled
 
     val method = option("Method", "The method used to blur the screen.", Blurs.DUAL_KAWASE, Blurs.entries)
     val useLinearSampling by switch(
@@ -215,17 +230,33 @@ object ModuleToggleableBlur :
 
     private val fbo = WrappedFramebuffer()
 
+    /**
+     * Dev probe for the chain's GL state. The mask and the composite are full-screen quads into
+     * full-window targets, so their viewport must match the target; anything else silently rasterises
+     * into a fraction of the screen and reads as "the effect does nothing".
+     */
+    private fun debugViewport(stage: String) {
+        if (System.getProperty("schizoid.spatial.debug") == null) return
+        val viewport = IntArray(4)
+        org.lwjgl.opengl.GL11.glGetIntegerv(org.lwjgl.opengl.GL11.GL_VIEWPORT, viewport)
+        Schizoid.logger.info(
+            "blur chain $stage: viewport=${viewport[2]}x${viewport[3]} at (${viewport[0]},${viewport[1]}) " +
+                "fbo=${fbo.width}x${fbo.height} main=${Render.mainTarget.width}x${Render.mainTarget.height}"
+        )
+    }
+
     override val shouldHandleEvents: Boolean
-        get() = isEnabled && fog && !mc.gameRenderer.isRenderingPanorama
+        get() = isActive && fog && !mc.gameRenderer.mainCamera().isPanoramicMode
 
     init {
         on<EventRenderWorld> {
+            Render.isolated {
             if (fogRGBPuke) {
                 fbo.clear()
                 fbo.beginWrite(false)
                 ShaderTint.bind()
-                RenderSystem.activeTexture(GL13.GL_TEXTURE0)
-                MinecraftClient.getInstance().framebuffer.beginRead()
+                glActiveTexture(GL_TEXTURE0)
+                Render.mainTarget.beginRead()
                 ShaderTint["Tex0"] = 0
                 ShaderTint["RGBPuke"] = fogRGBPuke
                 ShaderTint.set("SV", fogRGBPukeSaturation / 100f, fogRGBPukeBrightness / 100f)
@@ -233,40 +264,45 @@ object ModuleToggleableBlur :
                 ShaderTint["Alpha"] = false
                 ShaderTint["Multiplier"] = 1f
                 ShaderTint["Time"] = (System.nanoTime() - ShaderTint.initTime) / 1000000000f
-                ShaderTint["Yaw"] = mc.player?.yaw ?: 0f
-                ShaderTint["Pitch"] = mc.player?.pitch ?: 0f
+                ShaderTint["Yaw"] = mc.player?.yRot ?: 0f
+                ShaderTint["Pitch"] = mc.player?.xRot ?: 0f
                 Shader.drawFullScreen()
                 ShaderTint.unbind()
             }
 
             method.value.switchStrength(fogStrength)
-            method.value.render(if (fogRGBPuke) fbo else mc.framebuffer, false)
+            method.value.render(if (fogRGBPuke) fbo else Render.mainTarget, false)
 
+            debugViewport("after blur")
             fbo.clear()
             fbo.beginWrite(false)
+            debugViewport("mask bound")
             ShaderDepth.bind()
-            RenderSystem.activeTexture(GL13.GL_TEXTURE0)
+            glActiveTexture(GL_TEXTURE0)
             method.value.output.beginRead()
             ShaderDepth["Tex0"] = 0
-            RenderSystem.activeTexture(GL13.GL_TEXTURE1)
-            GlStateManager._bindTexture(mc.framebuffer.depthAttachment)
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, OpenGlBridge.depthTextureId(Render.mainTarget))
             ShaderDepth["Tex1"] = 1
-            ShaderDepth["Near"] = .05f
-            ShaderDepth["Far"] = mc.gameRenderer.farPlaneDistance
+            ShaderDepth["Near"] = Camera.PROJECTION_Z_NEAR
+            ShaderDepth["Far"] = mc.gameRenderer.gameRenderState().levelRenderState.cameraRenderState.depthFar
             ShaderDepth["MinThreshold"] = .10f * fogDistance / 100f
             ShaderDepth["MaxThreshold"] = .28f * fogDistance / 100f
             Shader.drawFullScreen()
             ShaderDepth.unbind()
 
-            mc.framebuffer.beginWrite(false)
+            debugViewport("after mask")
+            Render.mainTarget.beginWrite(false)
+            debugViewport("composite bound")
             ShaderPassThrough.bind()
-            RenderSystem.activeTexture(GL13.GL_TEXTURE0)
+            glActiveTexture(GL_TEXTURE0)
             fbo.beginRead()
             ShaderPassThrough["Tex0"] = 0
             ShaderPassThrough["Scale"] = 1f
             ShaderPassThrough["Alpha"] = true
             Shader.drawFullScreen()
             ShaderPassThrough.unbind()
+            }
         }
     }
 }

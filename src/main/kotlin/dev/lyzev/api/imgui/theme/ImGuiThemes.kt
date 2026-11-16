@@ -8,7 +8,7 @@ package dev.lyzev.api.imgui.theme
 import dev.lyzev.api.imgui.theme.themes.*
 import dev.lyzev.api.setting.settings.OptionEnum
 import dev.lyzev.api.theme.OSTheme
-import net.minecraft.client.gui.DrawContext
+import net.minecraft.client.gui.GuiGraphicsExtractor
 
 /**
  * Enum class representing different ImGui themes.
@@ -49,7 +49,7 @@ enum class ImGuiThemes(
 
     fun applyColors(mode: Mode) = this[mode].applyColors()
 
-    fun renderInGameBackground(context: DrawContext, width: Int, height: Int, mode: Mode) =
+    fun renderInGameBackground(context: GuiGraphicsExtractor, width: Int, height: Int, mode: Mode) =
         this[mode].renderInGameBackground(context, width, height)
 
     enum class Mode(override val key: String) : OptionEnum {

@@ -5,8 +5,6 @@
 
 package dev.lyzev.api.imgui.font
 
-import imgui.ImGui
-
 /**
  * Represents a font that can be used in ImGui.
  */
@@ -20,8 +18,15 @@ interface ImGuiFont {
     /**
      * The glyph ranges for the font.
      */
+    /**
+     * Latin-1, Cyrillic and General Punctuation.
+     *
+     * The punctuation block is not optional: any em dash, en dash, curly quote or ellipsis in a label
+     * is missing from the atlas without it and ImGui draws a "?" box instead, which is what made
+     * panel text look corrupted.
+     */
     val glyphRanges: ShortArray
-        get() = ImGui.getIO().fonts.glyphRangesDefault
+        get() = shortArrayOf(0x0020, 0x00FF, 0x0400, 0x052F, 0x2000, 0x206F, 0)
 
     /**
      * The type of the font.
