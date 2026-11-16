@@ -879,6 +879,37 @@ object SpatialInputRouter {
     internal fun isPinned(surfaceId: String): Boolean =
         surfaceId == carry?.id && carry?.candidate != null
 
+    /**
+     * Dev probe: drive the real carry path at a wall and report what the pin offered.
+     *
+     * A pin can only be checked with a face in reach, and the gesture itself needs a mouse drag. This
+     * runs `carryWithCamera` - the same function the gesture runs - with the panel parked in front of
+     * the eyes, so a rejected `prepare()` (the eight-millimetre clearance bug) shows up as
+     * `candidate=null` instead of "panels do not stick".
+     */
+    internal fun autotestPin(distance: Float): String {
+        val surface = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
+            ?: return "no workspace surface"
+        beginCarry(surface, GLFW.GLFW_MOUSE_BUTTON_LEFT)
+        val state = carry ?: return "carry not started"
+        state.local.set(0f, 0f, -distance)
+        carryWithCamera(state)
+        val candidate = state.candidate
+        val report = "pin probe: distance=${distance}m candidate=" +
+            (candidate?.let { "${it.face}@${it.blockX},${it.blockY},${it.blockZ}" } ?: "null") +
+            " joined=${state.joined} target=(${state.targetX}, ${state.targetY}, ${state.targetZ})"
+        // Finish exactly like a release: the saved pose and the anchor must agree.
+        surface.centerX = state.targetX
+        surface.centerY = state.targetY
+        surface.centerZ = state.targetZ
+        surface.yaw = state.targetYaw
+        surface.pitch = state.targetPitch
+        surface.attachment = candidate
+        surface.dockedTo = state.joined
+        carry = null
+        return report
+    }
+
     /** Push or pull the carried panel along the view ray (wheel while holding). */
     private fun nudgeCarried(amount: Float) {
         val state = carry ?: return

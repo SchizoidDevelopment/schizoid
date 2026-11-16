@@ -16,8 +16,12 @@ import dev.lyzev.api.opengl.shader.ShaderGameOfLife
 import dev.lyzev.schizoid.Schizoid
 import dev.lyzev.schizoid.feature.features.gui.FeatureImGui
 import imgui.ImGui
+import net.minecraft.core.BlockPos
+import net.minecraft.world.level.block.Blocks
 import org.joml.Matrix4f
 import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** Bakes original controls into independent canvases and composites them in the actual world pass. */
 object SpatialWorldHook : EventListener {
@@ -28,6 +32,9 @@ object SpatialWorldHook : EventListener {
     private var worldFrames = 0
     private var awayTurned = false
     private var remoteToggled = false
+    private var pinWallBuilt = false
+    private var pinProbed = false
+    private val pinWallBlocks = ArrayList<BlockPos>()
     private var probeFbo = 0
     private var previousFrameNanos = System.nanoTime()
     private var debugFrameCount = 0
@@ -239,6 +246,17 @@ object SpatialWorldHook : EventListener {
                             " features-left retiring=" + (target?.removeAfterClose == true)
                     )
                 }
+            }
+            // "pin" mode: a standing wall in front of the player, then the real carry path runs
+            // against it. Without a face in reach a pin cannot be observed at all, and the gesture
+            // needs a mouse drag the harness does not have.
+            if (System.getProperty("schizoid.spatial.autotest") == "pin" && SpatialWorldController.visible) {
+                if (!pinWallBuilt && worldFrames > 260) { buildPinWall(); pinWallBuilt = true }
+                if (pinWallBuilt && !pinProbed && worldFrames > 320) {
+                    Schizoid.logger.info(SpatialInputRouter.autotestPin(1.6f))
+                    pinProbed = true
+                }
+                if (pinProbed && worldFrames == 900) clearPinWall()
             }
             // "remote" mode: also park the pinned-module panel, which is the one piece of furniture that
             // sits off to the side instead of dead ahead.
@@ -506,6 +524,44 @@ object SpatialWorldHook : EventListener {
      * instead: edge energy of a block of pixels, logged once a second. Enabling an effect mid-run then
      * shows up as a drop for the region it should blur and no change for the region it should not.
      */
+    /**
+     * A standing stone wall in front of the player, for the pin probe.
+     *
+     * Client-side only: it exists long enough for the carry path to hit real collision faces and is
+     * removed by [clearPinWall]. The probe never writes to the world save, and the isolated client's
+     * copy of `Verification` is disposable anyway.
+     */
+    private fun buildPinWall() {
+        val player = Schizoid.mc.player ?: return
+        val level = Schizoid.mc.level ?: return
+        val eye = player.eyePosition
+        val look = player.lookAngle
+        val length = kotlin.math.sqrt(look.x * look.x + look.z * look.z)
+        if (length < 1e-4) return
+        // Right-hand axis in the horizontal plane: the wall is perpendicular to the gaze.
+        val rightX = look.z / length
+        val rightZ = -look.x / length
+        val centre = eye.add(look.scale(2.2))
+        val stone = Blocks.STONE.defaultBlockState()
+        for (i in -5..5) for (j in -3..4) {
+            val x = kotlin.math.floor(centre.x + rightX * i * 0.5).toInt()
+            val y = kotlin.math.floor(centre.y + j * 0.5).toInt()
+            val z = kotlin.math.floor(centre.z + rightZ * i * 0.5).toInt()
+            val pos = BlockPos(x, y, z)
+            if (!level.isLoaded(pos)) continue
+            level.setBlock(pos, stone, 3)
+            pinWallBlocks += pos
+        }
+        Schizoid.logger.info("pin probe: wall built with ${pinWallBlocks.size} blocks")
+    }
+
+    private fun clearPinWall() {
+        val level = Schizoid.mc.level ?: return
+        val air = Blocks.AIR.defaultBlockState()
+        pinWallBlocks.forEach { if (level.isLoaded(it)) level.setBlock(it, air, 3) }
+        pinWallBlocks.clear()
+    }
+
     private fun logWorldSharpness() {
         val target = Render.mainTarget
         var previous = 0
