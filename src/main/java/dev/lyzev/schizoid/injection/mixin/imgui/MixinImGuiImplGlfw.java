@@ -42,7 +42,7 @@ public class MixinImGuiImplGlfw {
     @Inject(method = "windowFocusCallback", at = @At("HEAD"), remap = false)
     private void worldFocus(long window, boolean focused, CallbackInfo ci) {
         if (!focused && window == windowPtr && SpatialInputRouter.INSTANCE.getInteracting())
-            SpatialInputRouter.INSTANCE.reset(false);
+            SpatialInputRouter.INSTANCE.suspendForFocusLoss();
     }
 
     @Shadow
@@ -72,6 +72,8 @@ public class MixinImGuiImplGlfw {
      */
     @Inject(method = "scrollCallback", at = @At(value = "INVOKE", target = "Limgui/ImGui;getIO()Limgui/ImGuiIO;"), cancellable = true, remap = false)
     private void onScrollCallback(long windowId, double xOffset, double yOffset, CallbackInfo ci) {
+        // The previous vanilla callback already ran. Chat owns non-panel history scrolling.
+        if (SpatialInputRouter.INSTANCE.getCursorMode()) { ci.cancel(); return; }
         // Update target scroll position
         ImGuiRenderer.INSTANCE.setTargetScrollX((float) (ImGuiRenderer.INSTANCE.getTargetScrollX() + xOffset));
         ImGuiRenderer.INSTANCE.setTargetScrollY((float) (ImGuiRenderer.INSTANCE.getTargetScrollY() + yOffset));
@@ -91,7 +93,7 @@ public class MixinImGuiImplGlfw {
      */
     @Inject(method = "keyCallback", at = @At(value = "INVOKE", target = "Limgui/ImGui;getIO()Limgui/ImGuiIO;"), cancellable = true, remap = false)
     private void onKeyCallback(long windowId, int key, int scancode, int action, int mods, CallbackInfo ci) {
-        if (!ImGui.getIO().getWantCaptureKeyboard()) {
+        if (SpatialInputRouter.INSTANCE.getInteracting() || SpatialInputRouter.INSTANCE.getCursorMode() || !ImGui.getIO().getWantCaptureKeyboard()) {
             final ImGuiIO io = ImGui.getIO();
 
             for (int ownedKey = 0; ownedKey < keyOwnerWindows.length; ownedKey++) {
@@ -123,7 +125,7 @@ public class MixinImGuiImplGlfw {
             ci.cancel();
             return;
         }
-        if (!ImGui.getIO().getWantCaptureMouse()) {
+        if (SpatialInputRouter.INSTANCE.getInteracting() || SpatialInputRouter.INSTANCE.getCursorMode() || !ImGui.getIO().getWantCaptureMouse()) {
             // Keep Minecraft's callback chain intact even when the backend has no previous callback.
             if (windowId == windowPtr && prevUserCallbackMouseButton != null)
                 prevUserCallbackMouseButton.invoke(windowId, button, action, mods);
@@ -135,6 +137,6 @@ public class MixinImGuiImplGlfw {
 
     @Inject(method = "charCallback", at = @At(value = "INVOKE", target = "Limgui/ImGui;getIO()Limgui/ImGuiIO;"), cancellable = true, remap = false)
     private void onCharCallback(long windowId, int codepoint, CallbackInfo ci) {
-        if (!ImGui.getIO().getWantCaptureKeyboard()) ci.cancel();
+        if (SpatialInputRouter.INSTANCE.getInteracting() || SpatialInputRouter.INSTANCE.getCursorMode() || !ImGui.getIO().getWantCaptureKeyboard()) ci.cancel();
     }
 }

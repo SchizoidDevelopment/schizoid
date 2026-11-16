@@ -32,9 +32,9 @@ public class MixinMouse {
         if (SpatialInputRouter.INSTANCE.onButton(window, button.button(), action, button.modifiers())) ci.cancel();
     }
 
-    @Inject(method = {"onMove", "lambda$setup$0"}, at = @At("HEAD"), cancellable = true)
+    @Inject(method = "onMove", at = @At("HEAD"))
     private void worldMove(long window, double x, double y, CallbackInfo ci) {
-        if (SpatialInputRouter.INSTANCE.onMove(window, x, y)) ci.cancel();
+        SpatialInputRouter.INSTANCE.onMove(window, x, y);
     }
 
     /**
@@ -75,8 +75,12 @@ public class MixinMouse {
      *
      * @param ci The callback information.
      */
-    @Inject(method = "turnPlayer", at = @At("HEAD"))
+    @Inject(method = "turnPlayer", at = @At("HEAD"), cancellable = true)
     private void onUpdateMouse(double elapsedTime, CallbackInfo ci) {
+        if (SpatialInputRouter.INSTANCE.capturesLook()) {
+            ci.cancel();
+            return;
+        }
         // Camera turning stays enabled on purpose: with gaze aiming the crosshair *is* the pointer,
         // so the player looks around to move it. The router arbitrates clicks, not the look.
         EventUpdateMouse.INSTANCE.fire();
