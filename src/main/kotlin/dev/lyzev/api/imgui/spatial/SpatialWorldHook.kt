@@ -51,14 +51,49 @@ object SpatialWorldHook : EventListener {
             reloadFrames++
             when (phase) {
                 0 -> if (SpatialWindows.surfaces.isNotEmpty()) {
-                    val panel = SpatialWindows.surfaces.first()
-                    panel.centerX += 2.5
-                    panel.motion.instant()
-                    reloadMark = "%.1f,%.1f,%.1f".format(panel.centerX, panel.centerY, panel.centerZ)
-                    Schizoid.logger.info(
-                        "autotest reload: moved ${panel.id} to $reloadMark, quitting in a second"
-                    )
-                    armAt = reloadFrames + 60
+                    if (autotest == "pinreload") {
+                        // A panel screwed to a wall is the one piece of state a player builds up over a
+                        // session. Faking the attachment would prove nothing, so the wall is real and the
+                        // pin runs through the same carry path a hand does.
+                        // The chunks around the player are not loaded on the first frames after a join:
+                        // building immediately produced a wall of zero blocks. Give the level time, then
+                        // build, then pin one beat later.
+                        armAt = reloadFrames + 200
+                        phase = 6
+                    } else {
+                        val panel = SpatialWindows.surfaces.first()
+                        panel.centerX += 2.5
+                        panel.motion.instant()
+                        reloadMark = "%.1f,%.1f,%.1f".format(panel.centerX, panel.centerY, panel.centerZ)
+                        reloadId = panel.id
+                        Schizoid.logger.info(
+                            "autotest reload: moved ${panel.id} to $reloadMark, quitting in a second"
+                        )
+                        armAt = reloadFrames + 60
+                        phase = 1
+                    }
+                }
+                6 -> if (reloadFrames >= armAt) {
+                    // Client-side setBlock only ever lived in this client's copy: after a reload the wall
+                    // was gone, the panel honestly had no support and the probe "proved" a pin bug that
+                    // was really a test artifact. A fill command changes the server's world, so the wall
+                    // is still there when the world comes back.
+                    buildPinWallOnServer()
+                    armAt = reloadFrames + 40
+                    phase = 7
+                }
+                7 -> if (reloadFrames >= armAt) {
+                    Schizoid.logger.info("autotest reload: pin -> " + SpatialInputRouter.autotestPin(1.6f))
+                    val panel = SpatialWindows.surfaces.firstOrNull { it.id == "workspace" }
+                    if (panel != null) {
+                        reloadId = panel.id
+                        reloadAttachment = panel.attachment
+                        reloadMark = "%.1f,%.1f,%.1f".format(panel.centerX, panel.centerY, panel.centerZ)
+                        Schizoid.logger.info(
+                            "autotest reload: leaving ${panel.id} at $reloadMark attachment=$reloadAttachment"
+                        )
+                    }
+                    armAt = reloadFrames + 90
                     phase = 1
                 }
                 1 -> if (reloadFrames >= armAt) {
@@ -81,15 +116,37 @@ object SpatialWorldHook : EventListener {
                     armAt = reloadFrames + 240
                     phase = 4
                 }
+                8 -> if (reloadFrames >= armAt) {
+                    removePinWallOnServer()
+                    armAt = reloadFrames + 80
+                    phase = 9
+                }
+                9 -> if (reloadFrames >= armAt) {
+                    val after = SpatialWindows.surfaces.firstOrNull { it.id == reloadId }
+                    Schizoid.logger.info(
+                        "autotest reload: wall removed, attachment=" + after?.attachment +
+                            " (want null)"
+                    )
+                    phase = 5
+                }
                 4 -> if (reloadFrames >= armAt) {
+                    // Compare the same panel by id: after a load the list order is not the order the
+                    // layout was written in, and first() was comparing two different panels.
+                    val back = SpatialWindows.surfaces.firstOrNull { it.id == reloadId }
                     Schizoid.logger.info(
                         "autotest reload: back surfaces=${SpatialWindows.surfaces.size} " +
                             "visible=${SpatialWorldController.visible} panel=" +
-                            SpatialWindows.surfaces.firstOrNull()?.let {
-                                "%.1f,%.1f,%.1f".format(it.centerX, it.centerY, it.centerZ)
-                            } + " expected=$reloadMark"
+                            back?.let { "%.1f,%.1f,%.1f".format(it.centerX, it.centerY, it.centerZ) } +
+                            " expected=$reloadMark attachment=" + back?.attachment +
+                            " expectedAttachment=$reloadAttachment"
                     )
-                    phase = 5
+                    if (autotest == "pinreload") {
+                        // The other half of the contract: take the wall away and the pin must go with it.
+                        armAt = reloadFrames + 80
+                        phase = 8
+                    } else {
+                        phase = 5
+                    }
                 }
             }
         }
@@ -107,6 +164,8 @@ object SpatialWorldHook : EventListener {
     private var diedSinceSpawn = false
     private var reloadFrames = 0
     private var reloadMark: String? = null
+    private var reloadAttachment: SpatialAttachment? = null
+    private var reloadId: String? = null
     private var pinWallBuilt = false
     private var pinProbed = false
     private val pinWallBlocks = ArrayList<BlockPos>()
@@ -127,7 +186,7 @@ object SpatialWorldHook : EventListener {
         Schizoid.logger.info(
             "spatial build: fan v3 (one pin clearance, no auto-close, clean material, no edge marks)"
         )
-        if (autotest == "reload") registerReloadProbe()
+        if (autotest == "reload" || autotest == "pinreload") registerReloadProbe()
         on<EventRenderWorld> { event ->
             debugFrameCount++
             SpatialWorldController.syncWorld()
@@ -859,6 +918,36 @@ object SpatialWorldHook : EventListener {
             pinWallBlocks += pos
         }
         Schizoid.logger.info("pin probe: wall built with ${pinWallBlocks.size} blocks")
+    }
+
+    /** Server-side wall for probes that outlive a reload: client-only blocks do not survive one. */
+    private fun buildPinWallOnServer() {
+        val player = Schizoid.mc.player ?: return
+        val eye = player.eyePosition
+        val look = player.lookAngle
+        val length = kotlin.math.sqrt(look.x * look.x + look.z * look.z)
+        if (length < 1e-4) return
+        val centre = eye.add(look.scale(2.2))
+        val px = kotlin.math.floor(centre.x).toInt()
+        val py = kotlin.math.floor(centre.y).toInt()
+        val pz = kotlin.math.floor(centre.z).toInt()
+        val command = if (kotlin.math.abs(look.x) > kotlin.math.abs(look.z)) {
+            "fill ${px} ${py - 2} ${pz - 3} ${px} ${py + 3} ${pz + 3} minecraft:stone"
+        } else {
+            "fill ${px - 3} ${py - 2} ${pz} ${px + 3} ${py + 3} ${pz} minecraft:stone"
+        }
+        player.connection.sendCommand(command)
+        Schizoid.logger.info("pin probe: asked the server to build a wall ($command)")
+    }
+
+    /** Take the probe wall away on the server, so the "support lost" path is the real one. */
+    private fun removePinWallOnServer() {
+        val player = Schizoid.mc.player ?: return
+        val anchor = reloadAttachment ?: return
+        val command = "fill ${anchor.blockX - 4} ${anchor.blockY - 3} ${anchor.blockZ} " +
+            "${anchor.blockX + 4} ${anchor.blockY + 4} ${anchor.blockZ} minecraft:air"
+        player.connection.sendCommand(command)
+        Schizoid.logger.info("autotest reload: asked the server to remove the wall ($command)")
     }
 
     private fun clearPinWall() {

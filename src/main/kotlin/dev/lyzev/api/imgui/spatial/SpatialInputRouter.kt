@@ -1087,6 +1087,27 @@ object SpatialInputRouter {
         surface.centerX = accepted.centerX; surface.centerY = accepted.centerY; surface.centerZ = accepted.centerZ
     }
 
+    /**
+     * Whether the blocks a panel covers are all in a loaded chunk. Used only when the support fit came
+     * back null: an unloaded neighbour would otherwise read as a missing wall and drop a saved pin.
+     */
+    private fun panelRegionLoaded(level: net.minecraft.client.multiplayer.ClientLevel, surface: SpatialSurface): Boolean {
+        val halfWidth = surface.physicalWidth * .5f + 1f
+        val halfHeight = surface.physicalHeight * .5f + 1f
+        // Panel-local axes: X runs along the face, Y is world up.
+        val yaw = surface.yaw
+        val rightX = kotlin.math.cos(yaw)
+        val rightZ = -kotlin.math.sin(yaw)
+        for (du in -1..1) for (dv in -1..1) {
+            val x = surface.centerX + rightX.toDouble() * halfWidth * du
+            val y = surface.centerY + halfHeight.toDouble() * dv
+            val z = surface.centerZ + rightZ.toDouble() * halfWidth * du
+            if (!level.isLoaded(BlockPos(kotlin.math.floor(x).toInt(), kotlin.math.floor(y).toInt(),
+                    kotlin.math.floor(z).toInt()))) return false
+        }
+        return true
+    }
+
     private fun revalidateAttachments() {
         // Do not detach anchors merely because their chunk has not loaded yet.
         val level = Schizoid.mc.level
@@ -1106,6 +1127,12 @@ object SpatialInputRouter {
                 val pos = BlockPos(anchor.blockX, anchor.blockY, anchor.blockZ)
                 // isLoaded() does not force-load a chunk the way getBlockState would.
                 if (!level.isLoaded(pos)) continue
+                // prepare() needs the anchor's neighbours too, and returns null for an unloaded one just
+                // like it does for a missing face. Right after a reload those chunks are still arriving,
+                // so treating "not loaded yet" as "support lost" unpinned every saved panel for good -
+                // visible as "I screwed it to the wall, came back, and it is loose again".
+                if (!level.isLoaded(pos.offset(-1, 0, 0)) || !level.isLoaded(pos.offset(1, 0, 0)) ||
+                    !level.isLoaded(pos.offset(0, 0, -1)) || !level.isLoaded(pos.offset(0, 0, 1))) continue
                 var fit = SpatialFaceClamp.offset(surface, surface.yaw, surface.pitch,
                     surface.centerX, surface.centerY, surface.centerZ, anchor)
                 val previous = supportedSizes[surface.id]
@@ -1118,8 +1145,21 @@ object SpatialInputRouter {
                         surface.centerX, surface.centerY, surface.centerZ, anchor)
                     detached = true
                 }
+                // A panel spans several blocks, and the anchor's own chunk can be loaded while the rest of
+                // the wall is still arriving: fitAnchored then sees a partial wall and refuses. That is
+                // "not loaded yet", not "support lost", so wait instead of unpinning a saved panel.
+                if (fit == null && !panelRegionLoaded(level, surface)) continue
                 if (fit == null) {
                     // Removed collision, occluded face or external size change: never retain a false pin.
+                    // Say so once per release: "my panel always comes back unpinned" is not diagnosable
+                    // from a screenshot, and the reason here is different for every branch above.
+                    Schizoid.logger.info(
+                        "spatial ${surface.id}: pin released, anchor ${anchor.face}@" +
+                            "${anchor.blockX},${anchor.blockY},${anchor.blockZ} no longer supports it " +
+                            "(yaw=${surface.yaw} pitch=${surface.pitch} gap=${anchor.gap} " +
+                            "centre=%.3f,%.3f,%.3f block=".format(surface.centerX, surface.centerY, surface.centerZ) +
+                            level.getBlockState(pos)
+                    )
                     surface.attachment = null
                     carry?.takeIf { it.id == surface.id }?.candidate = null
                     supportedSizes.remove(surface.id)
