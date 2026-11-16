@@ -1,0 +1,75 @@
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+index 80ef77d3d..c8a7c5f8b 100644
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -1993,6 +1993,51 @@ ImFontAtlas::~ImFontAtlas()
+     Clear();
+ }
+ 
++// Java-owned glyph ranges outlive ConfigData, even after atlas builds.
++#include <mutex>
++#include <cstdlib>
++struct JavaRangeNode { ImFontAtlas* atlas; ImWchar* ranges; JavaRangeNode* next; };
++static std::mutex java_range_mutex;
++static JavaRangeNode* java_range_head = NULL;
++bool JavaTrackFontRanges(ImFontAtlas* atlas, ImWchar* ranges) noexcept
++{
++    JavaRangeNode* node = (JavaRangeNode*)std::malloc(sizeof(JavaRangeNode));
++    if (!node) return false;
++    try {
++        std::lock_guard<std::mutex> lock(java_range_mutex);
++        node->atlas = atlas; node->ranges = ranges; node->next = java_range_head;
++        java_range_head = node;
++        return true;
++    } catch (...) { std::free(node); return false; }
++}
++void JavaUntrackFontRanges(ImFontAtlas* atlas, ImWchar* ranges) noexcept
++{
++    try {
++        std::lock_guard<std::mutex> lock(java_range_mutex);
++        JavaRangeNode** p = &java_range_head;
++        while (*p) {
++            JavaRangeNode* node = *p;
++            if (node->atlas == atlas && node->ranges == ranges) {
++                *p = node->next; IM_FREE(node->ranges); std::free(node); return;
++            }
++            p = &node->next;
++        }
++    } catch (...) { /* Retain ownership if locking fails. */ }
++}
++static void JavaClearFontRanges(ImFontAtlas* atlas) noexcept
++{
++    try {
++        std::lock_guard<std::mutex> lock(java_range_mutex);
++        JavaRangeNode** p = &java_range_head;
++        while (*p) {
++            JavaRangeNode* node = *p;
++            if (node->atlas == atlas) {
++                *p = node->next; IM_FREE(node->ranges); std::free(node);
++            } else p = &node->next;
++        }
++    } catch (...) { /* Preserve live ranges on lock failure. */ }
++}
++
+ void    ImFontAtlas::ClearInputData()
+ {
+     IM_ASSERT(!Locked && "Cannot modify a locked ImFontAtlas between NewFrame() and EndFrame/Render()!");
+@@ -2011,6 +2056,7 @@ void    ImFontAtlas::ClearInputData()
+             Fonts[i]->ConfigDataCount = 0;
+         }
+     ConfigData.clear();
++    JavaClearFontRanges(this);
+     CustomRects.clear();
+     PackIdMouseCursors = PackIdLines = -1;
+     // Important: we leave TexReady untouched
+@@ -2156,8 +2202,8 @@ ImFont* ImFontAtlas::AddFontFromFileTTF(const char* filename, float size_pixels,
+     void* data = ImFileLoadToMemory(filename, "rb", &data_size, 0);
+     if (!data)
+     {
+-        IM_ASSERT_USER_ERROR(0, "Could not load font file!");
+-        return NULL;
++        return NULL; // Missing files are reported to Java as a null native font.
++
+     }
+     ImFontConfig font_cfg = font_cfg_template ? *font_cfg_template : ImFontConfig();
+     if (font_cfg.Name[0] == '\0')

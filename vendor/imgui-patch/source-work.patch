@@ -1,0 +1,173 @@
+diff --git a/imgui-binding/build.gradle b/imgui-binding/build.gradle
+index 51d98d4..8837406 100644
+--- a/imgui-binding/build.gradle
++++ b/imgui-binding/build.gradle
+@@ -10,7 +10,7 @@ plugins {
+ 
+ java {
+     toolchain {
+-        languageVersion.set(JavaLanguageVersion.of(8))
++        languageVersion.set(JavaLanguageVersion.of(17))
+     }
+ }
+ 
+diff --git a/imgui-binding/src/main/java/imgui/ImFontAtlas.java b/imgui-binding/src/main/java/imgui/ImFontAtlas.java
+index d0d4896..4d0617d 100644
+--- a/imgui-binding/src/main/java/imgui/ImFontAtlas.java
++++ b/imgui-binding/src/main/java/imgui/ImFontAtlas.java
+@@ -40,6 +40,17 @@ public final class ImFontAtlas extends ImGuiStructDestroyable {
+         #include "_common.h"
+ 
+         #define IM_FONT_ATLAS ((ImFontAtlas*)STRUCT_PTR)
++        #include "imgui_internal.h"
++        #include <climits>
++        #include <new>
++        #include <cmath>
++        bool JavaTrackFontRanges(ImFontAtlas*, ImWchar*) noexcept;
++        void JavaUntrackFontRanges(ImFontAtlas*, ImWchar*) noexcept;
++        static void fontThrow(JNIEnv* env, const char* type, const char* message) {
++            if (env->ExceptionCheck()) return;
++            jclass cls = env->FindClass(type);
++            if (cls) { env->ThrowNew(cls, message); env->DeleteLocalRef(cls); }
++        }
+ 
+         jmethodID jImFontAtlasCreateAlpha8PixelsMID;
+         jmethodID jImFontAtlasCreateRgba32PixelsMID;
+@@ -58,7 +69,7 @@ public final class ImFontAtlas extends ImGuiStructDestroyable {
+     }
+ 
+     private native long nCreate(); /*
+-        return (intptr_t)(new ImFontConfig());
++        return (intptr_t)(new ImFontAtlas());
+     */
+ 
+     public ImFont addFont(final ImFontConfig imFontConfig) {
+@@ -86,37 +97,88 @@ public final class ImFontAtlas extends ImGuiStructDestroyable {
+     */
+ 
+     public ImFont addFontFromFileTTF(final String filename, final float sizePixels) {
+-        return new ImFont(nAddFontFromFileTTF(filename, sizePixels));
+-    }
+-
+-    private native long nAddFontFromFileTTF(String filename, float sizePixels); /*
+-        return (intptr_t)IM_FONT_ATLAS->AddFontFromFileTTF(filename, sizePixels);
+-    */
+-
+-    public ImFont addFontFromFileTTF(final String filename, final float sizePixels, final ImFontConfig imFontConfig) {
+-        return new ImFont(nAddFontFromFileTTF(filename, sizePixels, imFontConfig.ptr));
+-    }
+-
+-    private native long nAddFontFromFileTTF(String filename, float sizePixels, long imFontConfigPtr); /*
+-        return (intptr_t)IM_FONT_ATLAS->AddFontFromFileTTF(filename, sizePixels, (ImFontConfig*)imFontConfigPtr);
+-    */
+-
+-    public ImFont addFontFromFileTTF(final String filename, final float sizePixels, final short[] glyphRanges) {
+-        return new ImFont(nAddFontFromFileTTF(filename, sizePixels, glyphRanges));
+-    }
+-
+-    private native long nAddFontFromFileTTF(String filename, float sizePixels, short[] glyphRanges); /*
+-        return (intptr_t)IM_FONT_ATLAS->AddFontFromFileTTF(filename, sizePixels, NULL, (ImWchar*)&glyphRanges[0]);
+-    */
+-
+-    public ImFont addFontFromFileTTF(final String filename, final float sizePixels, final ImFontConfig imFontConfig, final short[] glyphRanges) {
+-        return new ImFont(nAddFontFromFileTTF(filename, sizePixels, imFontConfig.ptr, glyphRanges));
+-    }
+-
+-    private native long nAddFontFromFileTTF(String filename, float sizePixels, long imFontConfigPtr, short[] glyphRanges); /*
+-        return (intptr_t)IM_FONT_ATLAS->AddFontFromFileTTF(filename, sizePixels, (ImFontConfig*)imFontConfigPtr, (ImWchar*)&glyphRanges[0]);
++        return addFile(filename, sizePixels, null, null);
++    }
++
++    public ImFont addFontFromFileTTF(final String filename, final float sizePixels, final ImFontConfig config) {
++        if (config == null) throw new NullPointerException("config");
++        return addFile(filename, sizePixels, config, null);
++    }
++
++    public ImFont addFontFromFileTTF(final String filename, final float sizePixels, final short[] ranges) {
++        if (ranges == null) throw new NullPointerException("ranges");
++        return addFile(filename, sizePixels, null, ranges);
++    }
++
++    public ImFont addFontFromFileTTF(final String filename, final float sizePixels, final ImFontConfig config, final short[] ranges) {
++        if (config == null || ranges == null) throw new NullPointerException("config or ranges");
++        return addFile(filename, sizePixels, config, ranges);
++    }
++
++    private ImFont addFile(final String filename, final float size, final ImFontConfig config, final short[] ranges) {
++        if (filename == null) throw new NullPointerException("filename");
++        if (ptr == 0 || (config != null && config.ptr == 0)) throw new IllegalStateException("null native pointer");
++        if (!(size > 0) || !Float.isFinite(size)) throw new IllegalArgumentException("invalid font size");
++        long font = nAddFile(filename, size, config == null ? 0 : config.ptr, ranges);
++        return font == 0 ? null : new ImFont(font);
++    }
++
++    // Object parameters prevent generator pinning arrays or dereferencing null before our checks.
++    private native long nAddFile(Object filenameObject, float size, long configPtr, Object rangesObject); /*
++        if (!filenameObject) { fontThrow(env, "java/lang/NullPointerException", "filename"); return 0; }
++        ImFontAtlas* atlas = IM_FONT_ATLAS;
++        if (env->ExceptionCheck()) return 0;
++        if (!atlas) { fontThrow(env, "java/lang/IllegalStateException", "null atlas"); return 0; }
++        jstring name = (jstring)filenameObject;
++        jshortArray array = (jshortArray)rangesObject;
++        ImWchar* copy = NULL;
++        if (array) {
++            jsize n = env->GetArrayLength(array);
++            if (env->ExceptionCheck()) return 0;
++            if (n < 3 || !(n & 1) || (size_t)n > SIZE_MAX / sizeof(ImWchar)) {
++                fontThrow(env, "java/lang/IllegalArgumentException", "invalid glyph ranges"); return 0;
++            }
++            jshort* values = env->GetShortArrayElements(array, NULL);
++            if (!values) return 0;
++            bool valid = values[n-1] == 0;
++            for (jsize i = 0; valid && i < n-1; i += 2)
++                valid = (unsigned short)values[i] != 0 && (unsigned short)values[i] <= (unsigned short)values[i+1];
++            if (valid) {
++                copy = (ImWchar*)IM_ALLOC((size_t)n * sizeof(ImWchar));
++                if (copy) for (jsize i = 0; i < n; ++i) copy[i] = (ImWchar)(unsigned short)values[i];
++            }
++            env->ReleaseShortArrayElements(array, values, JNI_ABORT);
++            if (!valid) { fontThrow(env, "java/lang/IllegalArgumentException", "invalid glyph ranges"); return 0; }
++            if (!copy) { fontThrow(env, "java/lang/OutOfMemoryError", "glyph ranges"); return 0; }
++        }
++        const char* filename = env->GetStringUTFChars(name, NULL);
++        if (!filename) { if (copy) IM_FREE(copy); return 0; }
++        if (copy && !JavaTrackFontRanges(atlas, copy)) {
++            IM_FREE(copy); env->ReleaseStringUTFChars(name, filename);
++            fontThrow(env, "java/lang/OutOfMemoryError", "glyph range tracking"); return 0;
++        }
++        ImFontConfig cfg = configPtr ? *(ImFontConfig*)configPtr : ImFontConfig();
++        if (atlas->Locked || (cfg.MergeMode && atlas->Fonts.empty()) || cfg.FontData != NULL || (!copy && cfg.GlyphRanges != NULL)) {
++            if (copy) JavaUntrackFontRanges(atlas, copy);
++            env->ReleaseStringUTFChars(name, filename);
++            fontThrow(env, "java/lang/IllegalStateException", "invalid atlas or font config"); return 0;
++        }
++        size_t dataSize = 0;
++        void* data = ImFileLoadToMemory(filename, "rb", &dataSize, 0);
++        env->ReleaseStringUTFChars(name, filename);
++        if (!data || dataSize == 0 || dataSize > INT_MAX) {
++            if (data) IM_FREE(data);
++            if (copy) JavaUntrackFontRanges(atlas, copy);
++            return 0;
++        }
++        cfg.FontDataOwnedByAtlas = true;
++        ImFont* font = NULL;
++        try { font = atlas->AddFontFromMemoryTTF(data, (int)dataSize, size, &cfg, copy); }
++        catch (const std::bad_alloc&) { fontThrow(env, "java/lang/OutOfMemoryError", "font allocation; atlas state may be invalid"); return 0; }
++        catch (...) { fontThrow(env, "java/lang/RuntimeException", "native font error; atlas state may be invalid"); return 0; }
++        if (!font) { IM_FREE(data); if (copy) JavaUntrackFontRanges(atlas, copy); }
++        return (intptr_t)font;
+     */
+-
+     /**
+      * Note: Transfer ownership of 'ttf_data' to ImFontAtlas! Will be deleted after destruction of the atlas.
+      * Set font_cfg.FontDataOwnedByAtlas=false to keep ownership of your data and it won't be freed.
+@@ -391,7 +453,8 @@ public final class ImFontAtlas extends ImGuiStructDestroyable {
+             int size = 0; \
+             for (; ranges[0]; ranges += 2) \
+                 size += 2; \
+-            jshortArray jShorts = env->NewShortArray(size); \
++            jshortArray jShorts = env->NewShortArray(size + 1); \
++            if (!jShorts) return NULL; \
+             env->SetShortArrayRegion(jShorts, 0, size, (jshort*)glyphs); \
+             return jShorts;
+      */
